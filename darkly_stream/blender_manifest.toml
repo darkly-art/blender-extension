@@ -1,0 +1,29 @@
+schema_version = "1.0.0"
+
+id = "darkly_stream"
+version = "0.1.0"
+name = "Darkly Stream"
+tagline = "Stream the active camera view to Darkly"
+maintainer = "TheTechromancer <thetechromancer@protonmail.com>"
+type = "add-on"
+website = "https://darkly.art"
+
+tags = ["Import-Export"]
+
+blender_version_min = "5.1.0"
+
+# AGPL-3.0, matching LICENSE.
+license = ["SPDX:AGPL-3.0-or-later"]
+
+# The only elevated capability: a localhost HTTP stream. Its presence is what
+# makes online-access gating (in start_stream) mandatory.
+[permissions]
+network = "Serve the camera view to Darkly over a localhost HTTP stream"
+
+# Keep dev/build artifacts and tests out of the shipped zip.
+[build]
+paths_exclude_pattern = [
+  "__pycache__/",
+  "*.pyc",
+  "/tests/",
+]
