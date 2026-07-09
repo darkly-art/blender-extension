@@ -29,8 +29,10 @@ class DARKLY_PT_stream_panel(bpy.types.Panel):
 
         col = layout.column()
         col.enabled = not running  # settings are fixed while streaming
+        col.prop(props, "source")
+        if props.source == "CAMERA":
+            col.prop(props, "camera")
         col.prop(props, "port")
-        col.prop(props, "camera")
         col.prop(props, "fps")
         col.prop(props, "compression")
 
@@ -38,8 +40,8 @@ class DARKLY_PT_stream_panel(bpy.types.Panel):
         layout.prop(props, "profile")
 
         # Stream-independent profiling: times the pipeline directly and reports
-        # to the status bar + console. Needs a camera and an open 3D viewport,
-        # but no server or client.
+        # to the status bar + console. Needs an open 3D viewport (and a camera,
+        # for the camera source), but no server or client.
         layout.operator("darkly.stream_benchmark", icon="TIME")
 
         if running:

@@ -23,6 +23,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "darkly_stream"
 import numpy as np  # noqa: E402
 from PIL import Image  # noqa: E402
 
+import colormanage  # noqa: E402
 import encode  # noqa: E402
 
 
@@ -99,6 +100,55 @@ class EncodeRoundTripTest(unittest.TestCase):
         straight = np.array([[[0, 0, 0, 0]]], np.uint8)
         decoded = decode_png(self.enc.encode(W, H, capture_buffer(straight)))
         self.assertEqual(int(decoded[0, 0, 3]), 0)
+
+
+class FloatEncodeTest(unittest.TestCase):
+    """The viewport source hands the encoder scene-linear premultiplied float32
+    (plus the ViewSettings snapshot); the encoder must un-premultiply *before*
+    the display transform and produce the same PNG contract as the uint8 path."""
+
+    def setUp(self):
+        self.enc = encode.FrameEncoder(compression=1)  # no OCIO -> sRGB fallback
+        self.settings = colormanage.ViewSettings(
+            display="sRGB", view_transform=None, look=None, exposure=0.0, gamma=1.0
+        )
+
+    def tearDown(self):
+        self.enc.free()
+
+    def test_linear_float_roundtrip(self):
+        # One opaque mid-grey, one semi-transparent, one empty pixel, bottom-up.
+        H, W = 1, 3
+        linear_straight = np.array(
+            [[[0.5, 0.5, 0.5, 1.0], [0.5, 0.25, 0.125, 0.5], [0.0, 0.0, 0.0, 0.0]]],
+            np.float32,
+        )
+        premul = linear_straight.copy()
+        premul[..., :3] *= premul[..., 3:4]
+
+        decoded = decode_png(self.enc.encode(W, H, premul, self.settings))
+
+        expected_rgb = colormanage.linear_to_srgb(linear_straight[..., :3])
+        expected = np.round(
+            np.concatenate([expected_rgb, linear_straight[..., 3:4]], axis=-1) * 255.0
+        ).astype(np.uint8)
+        self.assertEqual(decoded.shape, (H, W, 4))
+        np.testing.assert_array_equal(decoded[..., 3], expected[..., 3])
+        diff = np.abs(decoded[..., :3].astype(int) - expected[..., :3].astype(int))
+        self.assertLessEqual(int(diff.max()), 1)
+
+    def test_unpremultiply_precedes_display_transform(self):
+        # If the transform ran on premultiplied colour, a half-alpha mid-grey
+        # would decode darker than the same colour at full alpha (the sRGB curve
+        # is non-linear). Both must decode to the same straight RGB.
+        H, W = 1, 1
+        opaque = np.array([[[0.5, 0.5, 0.5, 1.0]]], np.float32)
+        half = np.array([[[0.25, 0.25, 0.25, 0.5]]], np.float32)  # premul of 0.5
+
+        rgb_opaque = decode_png(self.enc.encode(W, H, opaque, self.settings))[0, 0, :3]
+        rgb_half = decode_png(self.enc.encode(W, H, half, self.settings))[0, 0, :3]
+
+        np.testing.assert_allclose(rgb_half, rgb_opaque, atol=1)
 
 
 if __name__ == "__main__":

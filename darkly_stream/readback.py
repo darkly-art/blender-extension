@@ -15,12 +15,15 @@ Regression-tested in `tests/test_readback.py`.
 import numpy as np
 
 
-def buffer_to_rgba(buffer, width, height):
+def buffer_to_pixels(buffer, width, height, dtype=np.uint8):
     """Copy a `(height, width, 4)` gpu readback `Buffer` into a numpy array.
+
+    `dtype` matches the `read_color` format: `np.uint8` for `'UBYTE'` reads,
+    `np.float32` for `'FLOAT'` reads.
 
     Flattens the Buffer to 1D before the numpy conversion (the multi-dimensional
     conversion is the fragile path), then reshapes. `buffer` need only support
     `.dimensions =` and the numpy array/buffer protocol - both of which the real
     `gpu.types.Buffer` provides."""
     buffer.dimensions = width * height * 4
-    return np.array(buffer, dtype=np.uint8).reshape(height, width, 4)
+    return np.array(buffer, dtype=dtype).reshape(height, width, 4)

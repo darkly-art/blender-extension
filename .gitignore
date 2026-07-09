@@ -1,0 +1,11 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Built extension packages
+/dist/
+*.zip
+
+# Blender + OS cruft
+*.blend1
+.DS_Store

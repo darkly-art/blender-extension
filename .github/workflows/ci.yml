@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+# Cancel an in-progress run when a newer commit lands on the same ref.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: python unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          # Match the interpreter Blender 5.1 bundles, so the tests run against
+          # the same Python the add-on executes under at runtime.
+          python-version: "3.14"
+      - name: Install test dependencies
+        # numpy + OpenImageIO ship inside Blender at runtime (the add-on bundles
+        # nothing — the self-contained rule); Pillow is the independent decoder
+        # the encode round-trip test cross-checks OIIO's output against.
+        run: python -m pip install --upgrade numpy pillow OpenImageIO
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+  extension:
+    name: validate + build extension
+    runs-on: ubuntu-latest
+    env:
+      # Newest 5.1.x stable; matches `blender_version_min` in the manifest.
+      BLENDER_VERSION: "5.1.2"
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Blender runtime libraries
+        # Blender links these X/GL libs even under `--command` (no GUI); without
+        # them the binary fails at load with "error while loading shared libraries".
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxrender1 libxi6 libxxf86vm1 libxfixes3 libxkbcommon0 libsm6 libgl1 \
+            libxrandr2 libxinerama1 libxcursor1 libegl1
+      - name: Install Blender ${{ env.BLENDER_VERSION }}
+        run: |
+          series="${BLENDER_VERSION%.*}"   # 5.1.2 -> 5.1 (the release directory)
+          url="https://download.blender.org/release/Blender${series}/blender-${BLENDER_VERSION}-linux-x64.tar.xz"
+          curl -fsSL "$url" -o /tmp/blender.tar.xz
+          mkdir -p "$HOME/blender"
+          tar -xf /tmp/blender.tar.xz -C "$HOME/blender" --strip-components=1
+          echo "$HOME/blender" >> "$GITHUB_PATH"
+      - name: Blender version
+        run: blender --version
+      - name: Validate extension manifest
+        run: blender --command extension validate darkly_stream
+      - name: Build extension
+        # `--output-dir` must already exist — Blender's builder won't create it.
+        run: |
+          mkdir -p dist
+          blender --command extension build --source-dir darkly_stream --output-dir dist
+      - uses: actions/upload-artifact@v7
+        with:
+          name: darkly_stream-extension
+          path: dist/*.zip
+          if-no-files-found: error
