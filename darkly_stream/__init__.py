@@ -64,6 +64,11 @@ _last_encode_ms = 0.0
 # is set.
 _draw_handler = None
 _capture_pending = False
+# The viewport the timer resolved for this frame (as_pointer of its SpaceView3D).
+# The draw handler fires for *every* redrawing viewport; it only services the
+# request when it's running for this one, so the signature and the captured
+# pixels always come from the same viewport.
+_target_space = None
 
 # Main-thread -> worker handoff: a single latest-frame slot (stale frames are
 # dropped, never queued) plus the worker thread that drains it.
@@ -114,7 +119,7 @@ def _timer_tick():
     requests one and forces a viewport redraw (the draw handler does the actual
     GPU capture). Returns the next interval, or `None` to unregister once streaming
     stops."""
-    global _last_signature, _needs_render, _harvest_owed, _capture_pending
+    global _last_signature, _needs_render, _harvest_owed, _capture_pending, _target_space
     if not _running:
         return None
 
@@ -133,10 +138,11 @@ def _timer_tick():
         _set_status(err)
         return interval
 
-    space, region = capture.find_view3d()
+    space, region = capture.find_view3d(props.viewport)
     if space is None:
         _set_status("Open a 3D viewport to stream")
         return interval
+    _target_space = space.as_pointer()
 
     # Dedup layer 1 (origin): nothing changed since the last publish - skip the
     # whole capture+encode. A static scene therefore drives zero GPU/CPU work
@@ -195,6 +201,9 @@ def _capture_draw_handler():
     space = ctx.space_data
     region = ctx.region
     if space is None or getattr(space, "type", None) != "VIEW_3D" or region is None:
+        return
+    # Not the viewport the timer selected - leave the request for its redraw.
+    if _target_space is not None and space.as_pointer() != _target_space:
         return
 
     scene = ctx.scene
@@ -309,9 +318,10 @@ def start_stream(scene):
 def stop_stream():
     """Tear down the timer, worker, server, and GPU resources. Idempotent."""
     global _hub, _server, _capture, _encoder, _running, _worker_thread, _worker_stop
-    global _draw_handler, _capture_pending
+    global _draw_handler, _capture_pending, _target_space
     _running = False
     _capture_pending = False
+    _target_space = None
 
     if bpy.app.timers.is_registered(_timer_tick):
         bpy.app.timers.unregister(_timer_tick)
@@ -341,6 +351,28 @@ def stop_stream():
     _set_status("Stopped")
 
 
+# Blender requires the strings returned by a dynamic enum callback to stay
+# referenced from Python (a known API gotcha - they are otherwise garbage
+# collected while the UI still points at them), hence this module-level cache.
+_viewport_items = []
+
+
+def _viewport_enum_items(_self, _context):
+    global _viewport_items
+    items = [
+        (
+            "AUTO",
+            "Auto (First Viewport)",
+            "Capture the first open 3D viewport; follows the layout if "
+            "viewports come and go",
+        )
+    ]
+    for _space, _region, key, label in capture.list_view3d():
+        items.append((key, label, "Capture this 3D viewport"))
+    _viewport_items = items
+    return items
+
+
 class DarklyStreamProperties(bpy.types.PropertyGroup):
     source: bpy.props.EnumProperty(
         name="Source",
@@ -361,6 +393,13 @@ class DarklyStreamProperties(bpy.types.PropertyGroup):
         ),
         default="VIEWPORT",
         description="What the stream shows",
+    )
+    viewport: bpy.props.EnumProperty(
+        name="Viewport",
+        items=_viewport_enum_items,
+        description="Which 3D viewport to capture. Identified by position in "
+        "the layout, so a closed or rearranged selection falls back to the "
+        "first open viewport",
     )
     port: bpy.props.IntProperty(
         name="Port", default=8765, min=1, max=65535,
@@ -443,9 +482,11 @@ class DARKLY_OT_stream_benchmark(bpy.types.Operator):
         if err is not None:
             self.report({"ERROR"}, err)
             return {"CANCELLED"}
-        if capture.find_view3d()[0] is None:
+        target_space = capture.find_view3d(props.viewport)[0]
+        if target_space is None:
             self.report({"ERROR"}, "Open a 3D viewport to benchmark")
             return {"CANCELLED"}
+        self._target_space = target_space.as_pointer()
 
         self._scene = scene
         self._props = props
@@ -473,6 +514,8 @@ class DARKLY_OT_stream_benchmark(bpy.types.Operator):
         space = ctx.space_data
         region = ctx.region
         if space is None or getattr(space, "type", None) != "VIEW_3D" or region is None:
+            return
+        if space.as_pointer() != self._target_space:
             return
         self._pending = False
         t0 = time.perf_counter()

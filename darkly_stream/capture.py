@@ -52,20 +52,46 @@ except ImportError:
     import readback
 
 
-def find_view3d():
-    """First open 3D viewport as `(space, region)`, or `(None, None)` if the user
-    has no 3D viewport open (the timer then publishes nothing)."""
+def list_view3d():
+    """Every open 3D viewport as `(space, region, key, label)`, across all
+    windows. `key` is a re-resolvable identifier (`"<screen name>:<index of the
+    VIEW_3D area within that screen>"` - screen datablock names are unique) and
+    `label` is what the user sees in the viewport dropdown. Both are positional,
+    so they go stale if the user rearranges areas - resolution falls back to the
+    first viewport rather than stopping the stream (`find_view3d`)."""
+    found = []
     for window in bpy.context.window_manager.windows:
         screen = window.screen
         if screen is None:
             continue
+        index = 0
         for area in screen.areas:
             if area.type != "VIEW_3D":
                 continue
             region = next((r for r in area.regions if r.type == "WINDOW"), None)
-            if region is not None:
-                return area.spaces.active, region
-    return None, None
+            if region is None:
+                continue
+            suffix = f" #{index + 1}" if index else ""
+            label = f"{screen.name}{suffix} ({region.width}x{region.height})"
+            found.append((area.spaces.active, region, f"{screen.name}:{index}", label))
+            index += 1
+    return found
+
+
+def find_view3d(selector="AUTO"):
+    """The selected 3D viewport as `(space, region)`. `"AUTO"` - or a selection
+    that no longer resolves (viewport closed, layout rearranged) - yields the
+    first open viewport, so the stream degrades to "some viewport" instead of
+    stopping. `(None, None)` if no 3D viewport is open (the timer then
+    publishes nothing)."""
+    viewports = list_view3d()
+    if not viewports:
+        return None, None
+    if selector != "AUTO":
+        for space, region, key, _label in viewports:
+            if key == selector:
+                return space, region
+    return viewports[0][0], viewports[0][1]
 
 
 def _flatten(matrix):

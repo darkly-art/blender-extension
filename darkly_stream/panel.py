@@ -30,7 +30,9 @@ class DARKLY_PT_stream_panel(bpy.types.Panel):
         col = layout.column()
         col.enabled = not running  # settings are fixed while streaming
         col.prop(props, "source")
-        if props.source == "CAMERA":
+        if props.source == "VIEWPORT":
+            col.prop(props, "viewport")
+        else:
             col.prop(props, "camera")
         col.prop(props, "port")
         col.prop(props, "fps")

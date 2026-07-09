@@ -146,5 +146,59 @@ class RegistryTest(unittest.TestCase):
         self.assertEqual(set(capture.SOURCES), {"VIEWPORT", "CAMERA"})
 
 
+def _fake_area(kind="VIEW_3D", width=800, height=600):
+    space = types.SimpleNamespace()
+    region = types.SimpleNamespace(type="WINDOW", width=width, height=height)
+    return types.SimpleNamespace(type=kind, spaces=types.SimpleNamespace(active=space),
+                                 regions=[region])
+
+
+def _install_windows(*screens):
+    """Point the stubbed bpy.context at fake windows: `screens` is a list of
+    (name, [areas]) per window."""
+    windows = [
+        types.SimpleNamespace(screen=types.SimpleNamespace(name=name, areas=areas))
+        for name, areas in screens
+    ]
+    sys.modules["bpy"].context = types.SimpleNamespace(
+        window_manager=types.SimpleNamespace(windows=windows)
+    )
+
+
+class ViewportSelectionTest(unittest.TestCase):
+    """The viewport dropdown's enumeration + resolution: keys are positional
+    (screen name + index), and a stale selection falls back to the first open
+    viewport instead of stopping the stream."""
+
+    def test_enumerates_view3d_areas_across_windows(self):
+        a, b, c = _fake_area(), _fake_area(width=400), _fake_area()
+        _install_windows(
+            ("Layout", [a, _fake_area(kind="PROPERTIES"), b]),
+            ("Animation", [c]),
+        )
+        entries = capture.list_view3d()
+        self.assertEqual([e[2] for e in entries], ["Layout:0", "Layout:1", "Animation:0"])
+        # Labels disambiguate several viewports on one screen.
+        self.assertIn("Layout", entries[0][3])
+        self.assertIn("#2", entries[1][3])
+
+    def test_selector_resolves_to_that_viewport(self):
+        a, b = _fake_area(), _fake_area(width=400)
+        _install_windows(("Layout", [a, b]))
+        space, region = capture.find_view3d("Layout:1")
+        self.assertIs(space, b.spaces.active)
+        self.assertEqual(region.width, 400)
+
+    def test_auto_and_stale_selection_fall_back_to_first(self):
+        a = _fake_area()
+        _install_windows(("Layout", [a]))
+        self.assertIs(capture.find_view3d("AUTO")[0], a.spaces.active)
+        self.assertIs(capture.find_view3d("Gone:3")[0], a.spaces.active)
+
+    def test_no_viewports_yields_none(self):
+        _install_windows(("Layout", [_fake_area(kind="PROPERTIES")]))
+        self.assertEqual(capture.find_view3d(), (None, None))
+
+
 if __name__ == "__main__":
     unittest.main()

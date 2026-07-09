@@ -1,9 +1,9 @@
 name: CI
 
 on:
-  push:
-    branches: [main, master]
   pull_request:
+  push:
+    branches: [master]
 
 # Cancel an in-progress run when a newer commit lands on the same ref.
 concurrency:
@@ -67,3 +67,43 @@ jobs:
           name: darkly_stream-extension
           path: dist/*.zip
           if-no-files-found: error
+
+  release:
+    name: release
+    # `push` only fires on master (see the trigger above), so this gates the
+    # job to master pushes without re-running it for pull requests.
+    if: github.event_name == 'push'
+    needs: [tests, extension]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - name: Read manifest version
+        id: manifest
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' darkly_stream/blender_manifest.toml)"
+          test -n "$version"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+      - name: Check whether the version is already released
+        id: tag
+        run: |
+          if git ls-remote --exit-code --tags origin "refs/tags/${{ steps.manifest.outputs.tag }}" > /dev/null; then
+            echo "::notice::${{ steps.manifest.outputs.tag }} already exists — skipping release"
+            echo "taken=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "taken=false" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@v7
+        if: steps.tag.outputs.taken == 'false'
+        with:
+          name: darkly_stream-extension
+          path: dist
+      - name: Create release
+        if: steps.tag.outputs.taken == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${{ steps.manifest.outputs.tag }}" dist/*.zip \
+            --title "${{ steps.manifest.outputs.tag }}" \
+            --generate-notes

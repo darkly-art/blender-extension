@@ -1,6 +1,6 @@
 # Darkly Stream (Blender add-on)
 
-Stream a live view of Blender into [Darkly](https://darkly.art) over localhost,
+Stream a live view of Blender into [Darkly](https://darkly.art) (GitHub: [darkly-art/darkly](https://github.com/darkly-art/darkly)) over localhost,
 so you can paint over and composite with the live 3D scene. The view is served
 with a **transparent background**, so paint shows through empty areas - sketch
 behind and around geometry, try lighting or angles without re-rendering, and
@@ -10,8 +10,9 @@ Two sources, chosen in the panel:
 
 - **Viewport** (default) - streams **whatever the 3D viewport shows**, by
   reusing the pixels Blender already rendered. Zero extra rendering; orbiting,
-  panning, and zooming stream live. To stream a camera's framing, just look
-  through the camera (numpad 0).
+  panning, and zooming stream live. With several viewports open, a **Viewport**
+  dropdown picks which one (default: the first). To stream a camera's framing,
+  just look through the camera (numpad 0).
 - **Camera** - streams a **camera's point of view** regardless of where the
   viewport is looking, by rendering the scene once more per frame into an
   offscreen buffer.
@@ -85,9 +86,13 @@ to see in Darkly.
 ### A 3D viewport must be open
 
 A `bpy.app.timers` callback has no view context, so the add-on walks the open
-windows for a `VIEW_3D` area and captures through it. **Keep at least one 3D
-viewport open** while streaming; otherwise the panel shows "Open a 3D viewport
-to stream" and nothing is published.
+windows for `VIEW_3D` areas and captures through the one selected in the
+**Viewport** dropdown (*Auto* = the first). **Keep at least one 3D viewport
+open** while streaming; otherwise the panel shows "Open a 3D viewport to
+stream" and nothing is published. Viewports have no stable identity in
+Blender, so the dropdown identifies them by screen name + position; if the
+selected one is closed or the layout rearranged, the stream falls back to the
+first open viewport rather than stopping.
 
 ## Install
 
@@ -115,9 +120,10 @@ and pick the built `darkly_stream-0.1.0.zip`.
 
 ## Use
 
-1. Pick the **Source** - *Viewport* to stream what you see, *Camera* for a
-   fixed camera framing (the camera defaults to the scene camera). Set the
-   port (default `8765`), FPS, and PNG compression.
+1. Pick the **Source** - *Viewport* to stream what you see (and, with several
+   viewports open, which one), *Camera* for a fixed camera framing (the camera
+   defaults to the scene camera). Set the port (default `8765`), FPS, and PNG
+   compression.
 2. Click **Start**. The panel shows the stream URL and connected client count.
 3. In Darkly: **Add Void → Blender**. The layer connects to
    `http://localhost:8765/stream` and shows the view live.
@@ -218,7 +224,7 @@ blocks it, run Darkly from `http://localhost` or allow the localhost exception.
 darkly_stream/
   blender_manifest.toml  extension metadata (id, version, permissions, license)
   __init__.py     register/unregister, Scene props, pacing timer + dedup + harvest
-  panel.py        View3D N-panel: Start/Stop, source, port, fps, camera, quality
+  panel.py        View3D N-panel: Start/Stop, source, viewport, port, fps, camera, quality
   capture.py      the two capture sources: viewport framebuffer readback (PRE_VIEW)
                   and GPUOffScreen camera draw (POST_PIXEL)
   colormanage.py  scene-linear -> display transform via PyOpenColorIO (bpy-free)
