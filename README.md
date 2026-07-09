@@ -1,14 +1,15 @@
-# Darkly Stream
+# Darkly Blender Extension
 
-[![CI](https://img.shields.io/github/actions/workflow/status/darkly-art/blender-extension/ci.yml?branch=master&label=CI&logo=github&labelColor=black&style=for-the-badge&color=4400ff)](https://github.com/darkly-art/blender-extension/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/darkly-art/blender-extension?label=Release&logo=github&labelColor=black&style=for-the-badge&color=9500ff)](https://github.com/darkly-art/blender-extension/releases/latest)
 [![Discord](https://img.shields.io/discord/1495886270780539021?label=Discord&logo=discord&logoColor=white&style=for-the-badge&color=9500ff)](https://discord.gg/kFz2FGhbpu)
+[![Darkly](https://img.shields.io/badge/GitHub-Darkly-orange?logo=github&logoColor=white&style=for-the-badge&color=6914ff)](https://github.com/darkly-art/darkly)
 
 ![Blender](https://img.shields.io/badge/Blender_5.1+-000000?style=for-the-badge&logo=blender&logoColor=9500ff)
 ![Python](https://img.shields.io/badge/Python-000000?style=for-the-badge&logo=python&logoColor=6914ff)
+[![CI](https://img.shields.io/github/actions/workflow/status/darkly-art/blender-extension/ci.yml?branch=master&label=CI&logo=github&labelColor=black&logoColor=4400ff&style=for-the-badge&color=4400ff)](https://github.com/darkly-art/blender-extension/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/darkly-art/blender-extension?label=Release&logo=github&labelColor=black&logoColor=4400ff&style=for-the-badge&color=4400ff)](https://github.com/darkly-art/blender-extension/releases/latest)
 [![License](https://img.shields.io/badge/AGPL--3.0-000000?style=for-the-badge&label=License&labelColor=black&color=4400ff)](LICENSE)
 
-Stream a live view of Blender into [Darkly](https://darkly.art) (GitHub: [darkly-art/darkly](https://github.com/darkly-art/darkly)) over localhost. The stream has a **transparent background**, so you can paint behind and around your 3D scene and treat Blender as just another layer.
+Stream a live view of Blender into [Darkly](https://darkly.art) over localhost. The stream has a **transparent background**, so you can paint behind and around your 3D scene and treat Blender as just another layer.
 
 Two sources, chosen in the panel:
 
@@ -39,7 +40,7 @@ Good to know:
 - **Keep at least one 3D viewport open.** With several open, the **Viewport** dropdown picks which one to stream (*Auto* = the first).
 - It's safe to leave the stream running; nothing is captured or sent while the scene is unchanged or no client is connected.
 - If streaming slows Blender down, shrink the viewport or lower the FPS. **Benchmark Capture** in the panel times the capture and encode on your machine.
-- **Works offline.** The `network` permission covers a loopback-only listener; no internet connections are made, so Blender's **Allow Online Access** setting is not required.
+- **Works offline.** No internet connections are made and Blender's **Allow Online Access** setting is not required; the stream is served on localhost only. To stream to a different machine, check **All Interfaces** and point the void at `http://<this machine's IP>:8765/stream`.
 - If your browser blocks an `https://` Darkly page from reaching `http://localhost` (mixed content), run Darkly from `http://localhost`.
 
 ## How it works
@@ -65,7 +66,7 @@ blender --background your_scene.blend --python-expr \
 
 ```
 darkly_stream/
-  blender_manifest.toml  extension metadata (id, version, permissions, license)
+  blender_manifest.toml  extension metadata (id, version, license)
   __init__.py     register/unregister, Scene props, pacing timer + dedup + harvest
   panel.py        View3D N-panel: Start/Stop, source, viewport, port, fps, camera, quality
   capture.py      viewport framebuffer readback (PRE_VIEW) + GPUOffScreen camera draw

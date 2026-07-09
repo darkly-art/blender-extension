@@ -124,6 +124,12 @@ class StreamServer(ThreadingHTTPServer):
         self.stopping = False
 
 
+def bind_host(listen_all):
+    """The address to bind: loopback by default, or every interface when the
+    user opts in to serving other machines on the local network."""
+    return "0.0.0.0" if listen_all else "127.0.0.1"
+
+
 def start_server(host, port, hub):
     """Bind and serve on a background thread. Returns the running `StreamServer`
     (raises `OSError` if the port is taken)."""

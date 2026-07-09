@@ -1,9 +1,9 @@
 schema_version = "1.0.0"
 
 id = "darkly_stream"
-version = "0.1.0"
+version = "0.2.0"
 name = "Darkly Stream"
-tagline = "Stream the viewport or a camera view to Darkly"
+tagline = "Stream the viewport or a camera view directly into a Darkly layer"
 maintainer = "TheTechromancer <thetechromancer@protonmail.com>"
 type = "add-on"
 website = "https://darkly.art"
@@ -14,13 +14,6 @@ blender_version_min = "5.1.0"
 
 # AGPL-3.0, matching LICENSE.
 license = ["SPDX:AGPL-3.0-or-later"]
-
-# The only elevated capability: a localhost HTTP stream. Declared as
-# disclosure that a socket is opened; "Allow Online Access" is not gated on -
-# per the extensions guidelines it governs connections to the *internet*, and
-# this add-on makes none (loopback listener only).
-[permissions]
-network = "Serve the viewport or camera view to Darkly over a localhost HTTP stream"
 
 # Keep dev/build artifacts and tests out of the shipped zip.
 [build]

@@ -31,6 +31,7 @@ harvest the final state - `_harvest_owed` below. During continuous interaction
 the redraw tags coalesce with the redraws Blender performs anyway.
 """
 
+import logging
 import os
 
 import bpy
@@ -40,6 +41,8 @@ import threading
 from bpy.app.handlers import persistent
 
 from . import server, capture, encode
+
+log = logging.getLogger(__name__)
 
 # This is a Blender *extension* (metadata lives in `blender_manifest.toml`), not a
 # legacy add-on - there is deliberately no `bl_info` dict.
@@ -249,8 +252,8 @@ def _encode_worker():
         t0 = time.perf_counter()
         try:
             frame = _encoder.encode(width, height, rgba, view_settings)
-        except Exception as exc:  # noqa: BLE001 - a bad frame must not kill the worker
-            print(f"[darkly_stream] encode error: {exc}")
+        except Exception:  # noqa: BLE001 - a bad frame must not kill the worker
+            log.exception("encode error")
             continue
         _last_encode_ms = (time.perf_counter() - t0) * 1000.0
         _hub.publish(frame)
@@ -267,14 +270,14 @@ def start_stream(scene):
 
     # `bpy.app.online_access` is deliberately NOT checked: per the extensions
     # platform guidelines, "Allow Online Access" governs *connections to the
-    # internet*, and this add-on makes none - it only listens on loopback.
-    # The `network` permission stays declared in the manifest as disclosure
-    # that a (localhost) socket is opened.
+    # internet*, and this add-on makes none - it only listens for incoming
+    # connections. The manifest declares no `network` permission for the same
+    # reason (per the manifest spec it means internet access).
 
     props = scene.darkly_stream
     hub = server.FrameHub()
     try:
-        srv = server.start_server("127.0.0.1", props.port, hub)
+        srv = server.start_server(server.bind_host(props.listen_all), props.port, hub)
     except OSError as exc:
         _set_status(f"Could not bind port {props.port}: {exc}")
         return str(exc)
@@ -311,7 +314,8 @@ def start_stream(scene):
             _capture_draw_handler, (), "WINDOW", _capture.draw_handler_type
         )
 
-    _set_status(f"Streaming on http://127.0.0.1:{props.port}/stream")
+    url = f"http://127.0.0.1:{props.port}/stream"
+    _set_status(f"Streaming on {url} (all interfaces)" if props.listen_all else f"Streaming on {url}")
     return None
 
 
@@ -403,7 +407,13 @@ class DarklyStreamProperties(bpy.types.PropertyGroup):
     )
     port: bpy.props.IntProperty(
         name="Port", default=8765, min=1, max=65535,
-        description="localhost port the frame stream is served on",
+        description="Port the frame stream is served on",
+    )
+    listen_all: bpy.props.BoolProperty(
+        name="All Interfaces",
+        default=False,
+        description="Serve on every network interface so other machines on "
+        "your network can connect, instead of this machine only",
     )
     fps: bpy.props.IntProperty(
         name="FPS", default=15, min=1, max=60,

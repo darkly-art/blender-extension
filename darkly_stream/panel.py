@@ -35,6 +35,7 @@ class DARKLY_PT_stream_panel(bpy.types.Panel):
         else:
             col.prop(props, "camera")
         col.prop(props, "port")
+        col.prop(props, "listen_all")
         col.prop(props, "fps")
         col.prop(props, "compression")
 

@@ -101,6 +101,18 @@ class StreamServerTest(unittest.TestCase):
         finally:
             server.stop_server(srv)
 
+    def test_bind_host_defaults_to_loopback(self):
+        self.assertEqual(server.bind_host(False), "127.0.0.1")
+        self.assertEqual(server.bind_host(True), "0.0.0.0")
+
+    def test_listen_all_binds_every_interface(self):
+        hub = server.FrameHub()
+        srv = server.start_server(server.bind_host(True), 0, hub)
+        try:
+            self.assertEqual(srv.server_address[0], "0.0.0.0")
+        finally:
+            server.stop_server(srv)
+
     def test_client_count_tracks_connections(self):
         hub = server.FrameHub()
         hub.publish(b"x")

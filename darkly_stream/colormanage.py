@@ -26,7 +26,11 @@ approximate otherwise. Known gaps vs Blender: RENDERED-mode curve mapping and
 dither are not replicated.
 """
 
+import logging
+
 from dataclasses import dataclass
+
+log = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -106,7 +110,7 @@ class DisplayTransform:
             try:
                 self._config = ocio.Config.CreateFromFile(config_path)
             except Exception as exc:  # noqa: BLE001 - fall back, don't kill the stream
-                print(f"[darkly_stream] could not load OCIO config: {exc}")
+                log.warning("could not load OCIO config: %s", exc)
         self._key = None
         self._cpu = None
 
@@ -138,10 +142,10 @@ class DisplayTransform:
                     transform = group
                 self._cpu = self._config.getProcessor(transform).getDefaultCPUProcessor()
             except Exception as exc:  # noqa: BLE001 - fall back, don't kill the stream
-                print(f"[darkly_stream] OCIO transform failed ({exc}); using sRGB")
+                log.warning("OCIO transform failed (%s); using sRGB", exc)
         if self._cpu is None and not self._warned:
             self._warned = True
-            print("[darkly_stream] no OCIO; approximating the display transform as sRGB")
+            log.warning("no OCIO; approximating the display transform as sRGB")
         return self._cpu
 
     def apply(self, rgba, settings):
