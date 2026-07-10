@@ -25,7 +25,7 @@ Grab the latest zip from [Releases](https://github.com/darkly-art/blender-extens
 Or build and install from source (needs `blender` on your `PATH`):
 
 ```bash
-blender --command extension build --source-dir darkly_stream --output-dir dist
+mkdir -p dist && blender --command extension build --source-dir darkly_stream --output-dir dist
 blender --command extension install-file --repo user_default --enable dist/darkly_stream-*.zip
 ```
 

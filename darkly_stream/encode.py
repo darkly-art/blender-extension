@@ -29,9 +29,12 @@ Alpha correctness (verified, not inferred):
     cleared alpha=0 buffer. We un-premultiply with numpy
     (`rgb = where(a > 0, rgb / a, 0)`) -> straight alpha.
   - We tag the output `oiio:UnassociatedAlpha = 1` so the PNG writer stores
-    straight alpha (no re-premultiply), matching the Darkly void's
-    `premultiplied_alpha: false` sampling and the frontend's
-    `createImageBitmap(blob, { premultiplyAlpha: 'none' })` decode.
+    straight alpha (no re-premultiply) - the semantics PNG itself specifies.
+    Darkly's frontend decodes with
+    `createImageBitmap(blob, { premultiplyAlpha: 'premultiply' })`, converting
+    into the premultiplied convention its void frame texture stores (so GPU
+    linear filtering doesn't darken alpha edges); that decode consumes the
+    straight-alpha PNG correctly, so nothing changes on this side.
 
 Orientation: `read_color` gives bottom-up rows (OpenGL origin); image files are
 top-down, so we flip vertically before writing.
