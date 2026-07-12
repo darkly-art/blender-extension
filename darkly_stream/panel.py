@@ -13,19 +13,22 @@ class DARKLY_PT_stream_panel(bpy.types.Panel):
     def draw(self, context):
         # Imported lazily to avoid a circular import at module load (the package
         # __init__ imports this module).
-        from . import is_running, status_text
+        from . import is_running, status_text, has_live_resources, has_failed
 
         layout = self.layout
         props = context.scene.darkly_stream
         running = is_running()
 
-        if running:
+        # Stop stays reachable while *any* runtime resource is still held, not
+        # just while healthy - after a failure (or a half-failed stop) it is
+        # the recovery path that releases the port.
+        if running or has_live_resources():
             layout.operator("darkly.stream_stop", icon="PAUSE")
         else:
             layout.operator("darkly.stream_start", icon="PLAY")
 
         box = layout.box()
-        box.label(text=status_text(), icon="INFO")
+        box.label(text=status_text(), icon="ERROR" if has_failed() else "INFO")
 
         col = layout.column()
         col.enabled = not running  # settings are fixed while streaming

@@ -31,8 +31,25 @@ Two ways to produce a frame, behind one uniform surface (`SOURCES`):
 Everything the rest of the add-on needs to know is on the class: which draw
 handler event it must run under (`draw_handler_type`), whether the stream owes
 a trailing harvest redraw because captures are one frame stale
-(`needs_harvest`), the dedup `signature`, and the precondition `poll`.
-Consumers never branch on which source they hold.
+(`needs_harvest`), whether the source is dirty since the last capture
+(`is_dirty` / `mark_captured`), and the precondition `poll`. Consumers never
+branch on which source they hold.
+
+Dirtiness is type-owned, and the two sources answer it very differently:
+
+  - **ViewportCapture** trusts the *redraw*. Blender repaints the viewport for
+    every event that changes the output - each Cycles progressive-refinement
+    pass, a shading switch, a view move, a depsgraph edit - and no cheap
+    signature can see refinement happening in place (same view, same frame,
+    same region across many redraws). So the viewport source carries no
+    signature; it is dirty exactly when the streamed viewport has redrawn since
+    the last tick, and re-reads its (cheap) texture.
+  - **CameraCapture** keeps a private signature as a *render-skip*: its
+    `draw_view3d` is a full extra scene render, so it re-renders only when the
+    camera pose, frame, region size, or shading type changed, and ignores
+    redraws it didn't cause. (Its behaviour under progressive Cycles - whether
+    a single `draw_view3d` returns a low-sample pass - is a separate question
+    from the viewport source's freeze.)
 
 All capture methods must run on the main thread inside a live GPU context,
 i.e. from a viewport draw callback - NOT from a `bpy.app.timers` tick or an
@@ -112,19 +129,17 @@ class ViewportCapture:
         """No preconditions beyond an open viewport (checked by the caller)."""
         return None
 
-    def signature(self, scene, props, region):
-        """Moves on any orbit/pan/zoom or projection change
-        (`perspective_matrix = window_matrix @ view_matrix`), frame change, or
-        region resize. `None` when the region has no 3D view data yet."""
-        rv3d = region.data
-        if rv3d is None:
-            return None
-        return (
-            _flatten(rv3d.perspective_matrix),
-            scene.frame_current,
-            region.width,
-            region.height,
-        )
+    def is_dirty(self, scene, props, space, region, redraw_seen):
+        """Dirty exactly when the streamed viewport has redrawn since the last
+        tick. The redraw is the honest "something might have changed" signal:
+        it fires for every Cycles progressive pass, shading switch, view move,
+        and depsgraph edit, none of which a cheap signature can see (refinement
+        happens in place). A texture read is cheap, so trusting the redraw and
+        re-reading is the right trade."""
+        return redraw_seen
+
+    def mark_captured(self, scene, props, space, region):
+        """No per-source dedup state - the redraw signal lives on the runtime."""
 
     def capture(self, scene, props, space, region):
         """Read the bound framebuffer's color attachment - the viewport's scene
@@ -155,6 +170,9 @@ class CameraCapture:
     def __init__(self):
         self._offscreen = None
         self._size = (0, 0)
+        # Private render-skip: `draw_view3d` is a full extra render, so re-run
+        # it only when this signature moves (updated in `mark_captured`).
+        self._last_signature = None
 
     @staticmethod
     def _camera(scene, props):
@@ -168,9 +186,21 @@ class CameraCapture:
             return "No active camera in the scene"
         return None
 
-    def signature(self, scene, props, region):
-        # The region size is part of the signature so a viewport resize
-        # re-captures (the stream's resolution *is* the viewport's own).
+    def is_dirty(self, scene, props, space, region, redraw_seen):
+        """Dirty when the camera render would differ - its signature moved
+        since the last capture. Redraws the camera source didn't cause (the
+        viewport orbiting, another area repainting) are irrelevant, so it
+        ignores `redraw_seen` and avoids a needless full render."""
+        return self._signature(scene, props, space, region) != self._last_signature
+
+    def mark_captured(self, scene, props, space, region):
+        self._last_signature = self._signature(scene, props, space, region)
+
+    def _signature(self, scene, props, space, region):
+        # Camera pose + frame + region size + shading type. The region size is
+        # in the signature so a viewport resize re-captures (the stream's
+        # resolution *is* the viewport's own); the shading type is in it so a
+        # Solid->Rendered switch re-renders without waiting for a view move.
         camera = self._camera(scene, props)
         if camera is None:
             return None
@@ -179,6 +209,7 @@ class CameraCapture:
             scene.frame_current,
             region.width,
             region.height,
+            space.shading.type,
         )
 
     def _ensure_offscreen(self, width, height):

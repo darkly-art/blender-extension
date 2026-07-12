@@ -113,6 +113,93 @@ class StreamServerTest(unittest.TestCase):
         finally:
             server.stop_server(srv)
 
+    def test_idle_connection_receives_heartbeat(self):
+        # Regression: with no heartbeat, an idle scene and a dead server were
+        # indistinguishable on the wire - this read blocked forever pre-fix.
+        hub = server.FrameHub()
+        hub.publish(b"only-frame")
+        srv = server.start_server("127.0.0.1", 0, hub, heartbeat_interval=0.2)
+        port = srv.server_address[1]
+        try:
+            sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+            sock.sendall(b"GET /stream HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            client = _StreamClient(sock)
+            self.assertEqual(client.read_frame(), b"only-frame")
+            # Nothing else is published; the next payload must be a heartbeat
+            # (zero-length frame) within ~1.5x the interval, not a hang.
+            sock.settimeout(1.5)
+            self.assertEqual(client.read_frame(), b"")
+            sock.close()
+        finally:
+            server.stop_server(srv)
+
+    def test_heartbeat_wire_format(self):
+        # The heartbeat is a zero-length *application* frame: an HTTP chunk
+        # whose body is exactly the 4-byte big-endian length prefix of 0 -
+        # unambiguous vs. the empty chunk (`0\r\n\r\n`), which terminates the
+        # HTTP response.
+        hub = server.FrameHub()
+        srv = server.start_server("127.0.0.1", 0, hub, heartbeat_interval=0.2)
+        port = srv.server_address[1]
+        try:
+            sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+            sock.sendall(b"GET /stream HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            client = _StreamClient(sock)
+            sock.settimeout(1.5)
+            self.assertEqual(client._pull_chunk(), b"\x00\x00\x00\x00")
+            sock.close()
+        finally:
+            server.stop_server(srv)
+
+    def test_dead_client_detected_via_heartbeat(self):
+        # Regression: without periodic writes the handler blocked in `wait_for`
+        # forever after the client vanished, so `client_count` never decayed
+        # (defeating the "zero cost when nobody is connected" gate).
+        hub = server.FrameHub()
+        hub.publish(b"x")
+        srv = server.start_server("127.0.0.1", 0, hub, heartbeat_interval=0.2)
+        port = srv.server_address[1]
+        try:
+            sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+            sock.sendall(b"GET /stream HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            _StreamClient(sock).read_frame()
+            deadline = time.monotonic() + 2.0
+            while hub.client_count != 1 and time.monotonic() < deadline:
+                time.sleep(0.02)
+            self.assertEqual(hub.client_count, 1)
+            sock.close()
+            # Heartbeat writes to the closed socket raise in the handler, which
+            # then deregisters - the count must decay without any publish.
+            deadline = time.monotonic() + 5.0
+            while hub.client_count != 0 and time.monotonic() < deadline:
+                time.sleep(0.05)
+            self.assertEqual(hub.client_count, 0)
+        finally:
+            server.stop_server(srv)
+
+    def test_stop_terminates_client_response(self):
+        # Regression for the keep-alive park: `stop_server` only closes the
+        # *listening* socket, so without an explicit terminating chunk the
+        # handler parked in `rfile.readline()` with the client response never
+        # ended - the client hung instead of seeing a clean close.
+        hub = server.FrameHub()
+        hub.publish(b"frame")
+        srv = server.start_server("127.0.0.1", 0, hub, heartbeat_interval=0.2)
+        port = srv.server_address[1]
+        try:
+            sock = socket.create_connection(("127.0.0.1", port), timeout=5)
+            sock.sendall(b"GET /stream HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            client = _StreamClient(sock)
+            self.assertEqual(client.read_frame(), b"frame")
+            threading.Thread(target=server.stop_server, args=(srv,)).start()
+            # The handler notices `stopping` on its next wait timeout and must
+            # end the response with the terminating chunk (empty body).
+            sock.settimeout(2.0)
+            self.assertEqual(client._pull_chunk(), b"")
+            sock.close()
+        finally:
+            server.stop_server(srv)
+
     def test_client_count_tracks_connections(self):
         hub = server.FrameHub()
         hub.publish(b"x")

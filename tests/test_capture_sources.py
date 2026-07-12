@@ -1,13 +1,20 @@
-"""Tests for the capture sources' bpy-free surface: signatures and polling.
+"""Tests for the capture sources' bpy-free surface: dirtiness and polling.
 
-Regression test for a specific bug: the stream's dedup signature only tracked
-the *camera pose*, so orbiting/panning/zooming the viewport never produced a
-fresh frame - the viewport source's signature must move on any view change
-(it hashes `perspective_matrix`, which folds view and projection together).
+Dirtiness is type-owned (`is_dirty` / `mark_captured`), and the two sources
+answer it differently:
 
-`capture.py` imports `bpy`/`gpu` at module scope (its capture methods are
-GPU-bound), so those are stubbed here; the signature/poll logic under test is
-plain attribute access.
+  - `ViewportCapture` trusts the redraw: it is dirty exactly when the streamed
+    viewport has redrawn since the last tick (`redraw_seen`), so progressive
+    refinement passes - invisible to any cheap signature - are not frozen out.
+  - `CameraCapture` keeps a private render-skip signature (camera pose + frame +
+    region size + shading type) because its draw is a full extra render.
+
+Regression tests pinned here: a shading switch (Solid->Rendered) must move the
+camera signature so the camera stream refreshes without a view move; viewport
+navigation must NOT move it (that is the viewport source's concern, via the
+redraw). `capture.py` imports `bpy`/`gpu` at module scope (its capture methods
+are GPU-bound), so those are stubbed here; the logic under test is plain
+attribute access.
 """
 
 import os
@@ -52,41 +59,40 @@ def fake_props(camera=None):
     return types.SimpleNamespace(camera=camera)
 
 
-class ViewportSignatureTest(unittest.TestCase):
+def fake_space(shading_type="SOLID"):
+    return types.SimpleNamespace(shading=types.SimpleNamespace(type=shading_type))
+
+
+class ViewportDirtyTest(unittest.TestCase):
+    """The viewport source has no signature - it is dirty exactly when the
+    streamed viewport redrew (`redraw_seen`), so in-place progressive refinement
+    (same view, same frame) keeps streaming instead of freezing at pass one."""
+
     def setUp(self):
         self.src = capture.ViewportCapture()
         self.scene = fake_scene()
         self.props = fake_props()
+        self.space = fake_space()
+        self.region = fake_region(FakeMatrix.diag(1.0))
 
-    def test_navigation_changes_signature(self):
-        # The bug this defends against: view orbit/pan/zoom must invalidate the
-        # dedup signature (the old camera-pose signature never saw it).
-        before = self.src.signature(
-            self.scene, self.props, fake_region(FakeMatrix.diag(1.0))
+    def test_dirty_iff_redraw_seen(self):
+        self.assertTrue(
+            self.src.is_dirty(self.scene, self.props, self.space, self.region, True)
         )
-        after = self.src.signature(
-            self.scene, self.props, fake_region(FakeMatrix.diag(2.0))
+        self.assertFalse(
+            self.src.is_dirty(self.scene, self.props, self.space, self.region, False)
         )
-        self.assertNotEqual(before, after)
 
-    def test_static_view_is_stable(self):
-        a = self.src.signature(self.scene, self.props, fake_region(FakeMatrix.diag(1.0)))
-        b = self.src.signature(self.scene, self.props, fake_region(FakeMatrix.diag(1.0)))
-        self.assertEqual(a, b)
-
-    def test_frame_and_resize_change_signature(self):
-        base = self.src.signature(self.scene, self.props, fake_region(FakeMatrix.diag(1.0)))
-        frame = self.src.signature(
-            fake_scene(frame=2), self.props, fake_region(FakeMatrix.diag(1.0))
+    def test_dirtiness_ignores_view_and_frame_without_a_redraw(self):
+        # No signature: a moved view or advanced frame is invisible here - the
+        # redraw Blender issues for either is what drives dirtiness instead.
+        moved = fake_region(FakeMatrix.diag(9.0))
+        self.assertFalse(
+            self.src.is_dirty(fake_scene(frame=5), self.props, self.space, moved, False)
         )
-        resized = self.src.signature(
-            self.scene, self.props, fake_region(FakeMatrix.diag(1.0), width=801)
-        )
-        self.assertNotEqual(base, frame)
-        self.assertNotEqual(base, resized)
 
-    def test_region_without_view_data_yields_none(self):
-        self.assertIsNone(self.src.signature(self.scene, self.props, fake_region(None)))
+    def test_mark_captured_is_a_noop(self):
+        self.src.mark_captured(self.scene, self.props, self.space, self.region)
 
     def test_poll_has_no_preconditions(self):
         self.assertIsNone(self.src.poll(self.scene, self.props))
@@ -96,31 +102,60 @@ class ViewportSignatureTest(unittest.TestCase):
         self.assertTrue(self.src.needs_harvest)
 
 
-class CameraSignatureTest(unittest.TestCase):
+class CameraDirtyTest(unittest.TestCase):
+    """The camera source keeps a private render-skip signature: dirty only when
+    the render would differ (camera pose / frame / region size / shading type),
+    ignoring redraws it didn't cause."""
+
     def setUp(self):
         self.src = capture.CameraCapture()
         self.region = fake_region(FakeMatrix.diag(1.0))
+        self.space = fake_space("SOLID")
 
-    def test_camera_move_changes_signature_but_view_does_not(self):
-        cam_a = fake_camera(FakeMatrix.diag(1.0))
-        cam_b = fake_camera(FakeMatrix.diag(3.0))
-        scene = fake_scene(active_camera=cam_a)
-        base = self.src.signature(scene, fake_props(), self.region)
-        moved = self.src.signature(
-            fake_scene(active_camera=cam_b), fake_props(), self.region
+    def test_first_capture_is_dirty_then_stable(self):
+        scene = fake_scene(active_camera=fake_camera(FakeMatrix.diag(1.0)))
+        # Nothing captured yet -> dirty; after mark_captured, unchanged -> clean.
+        self.assertTrue(self.src.is_dirty(scene, fake_props(), self.space, self.region, False))
+        self.src.mark_captured(scene, fake_props(), self.space, self.region)
+        self.assertFalse(self.src.is_dirty(scene, fake_props(), self.space, self.region, False))
+
+    def test_camera_move_is_dirty_but_redraw_and_orbit_are_not(self):
+        cam = fake_camera(FakeMatrix.diag(1.0))
+        scene = fake_scene(active_camera=cam)
+        self.src.mark_captured(scene, fake_props(), self.space, self.region)
+        # A redraw alone (redraw_seen=True) and viewport orbit (different region
+        # view data, same size) must NOT re-render the camera source.
+        orbited = fake_region(FakeMatrix.diag(9.0))
+        self.assertFalse(self.src.is_dirty(scene, fake_props(), self.space, orbited, True))
+        # Moving the camera does.
+        moved = fake_scene(active_camera=fake_camera(FakeMatrix.diag(3.0)))
+        self.assertTrue(self.src.is_dirty(moved, fake_props(), self.space, self.region, False))
+
+    def test_shading_switch_is_dirty_without_a_view_move(self):
+        # Regression: a Solid->Rendered switch is not a depsgraph update and does
+        # not move the camera pose, so without shading in the signature the
+        # camera stream would not refresh until the view moved.
+        scene = fake_scene(active_camera=fake_camera(FakeMatrix.diag(1.0)))
+        self.src.mark_captured(scene, fake_props(), fake_space("SOLID"), self.region)
+        self.assertTrue(
+            self.src.is_dirty(scene, fake_props(), fake_space("RENDERED"), self.region, False)
         )
-        orbited = self.src.signature(
-            scene, fake_props(), fake_region(FakeMatrix.diag(9.0))
+        self.src.mark_captured(scene, fake_props(), fake_space("RENDERED"), self.region)
+        self.assertFalse(
+            self.src.is_dirty(scene, fake_props(), fake_space("RENDERED"), self.region, True)
         )
-        self.assertNotEqual(base, moved)
-        self.assertEqual(base, orbited)  # viewport navigation is irrelevant here
+
+    def test_resize_is_dirty(self):
+        scene = fake_scene(active_camera=fake_camera(FakeMatrix.diag(1.0)))
+        self.src.mark_captured(scene, fake_props(), self.space, self.region)
+        resized = fake_region(FakeMatrix.diag(1.0), width=801)
+        self.assertTrue(self.src.is_dirty(scene, fake_props(), self.space, resized, False))
 
     def test_explicit_camera_overrides_scene_camera(self):
         scene = fake_scene(active_camera=fake_camera(FakeMatrix.diag(1.0)))
-        override = fake_camera(FakeMatrix.diag(5.0))
-        a = self.src.signature(scene, fake_props(), self.region)
-        b = self.src.signature(scene, fake_props(camera=override), self.region)
-        self.assertNotEqual(a, b)
+        self.src.mark_captured(scene, fake_props(), self.space, self.region)
+        override = fake_props(camera=fake_camera(FakeMatrix.diag(5.0)))
+        self.assertTrue(self.src.is_dirty(scene, override, self.space, self.region, False))
 
     def test_poll_requires_a_camera(self):
         self.assertIsNotNone(self.src.poll(fake_scene(), fake_props()))

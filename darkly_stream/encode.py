@@ -115,6 +115,32 @@ class FrameEncoder:
             pass
 
 
+def frame_is_duplicate(rgba, view_settings, prev_rgba, prev_view_settings):
+    """True when this raw captured frame would encode to the same PNG as the
+    last published one, so the expensive encode can be skipped.
+
+    Compared on the *raw* buffer (pre display transform) plus its `ViewSettings`
+    snapshot: raw-identical pixels under identical settings encode to identical
+    bytes (the encode is deterministic), so this never drops a distinct-looking
+    frame. The settings are part of the key because the raw buffer is
+    scene-linear - a grading change (exposure / view transform / OCIO) leaves
+    the pixels identical while the displayed frame differs, and must NOT be
+    deduped. A shape change (viewport resize) is a mismatch, as is the first
+    frame (`prev_rgba is None`).
+
+    A plain `np.array_equal` is the compare: on a 720p float frame it is
+    ~1.7 ms for the equal case (the case that matters - it saves the ~30 ms
+    encode), memory-bandwidth-bound and needing no digest. A distinct frame
+    gets encoded regardless, so its compare cost is noise next to the encode; a
+    strided fast-reject was measured to only *slow* the equal case, so there
+    isn't one."""
+    if prev_rgba is None or view_settings != prev_view_settings:
+        return False
+    if rgba.shape != prev_rgba.shape:
+        return False
+    return np.array_equal(rgba, prev_rgba)
+
+
 _SRGB_FALLBACK = colormanage.ViewSettings(
     display="sRGB", view_transform=None, look=None, exposure=0.0, gamma=1.0
 )

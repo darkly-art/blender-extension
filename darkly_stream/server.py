@@ -13,11 +13,28 @@ bumps `_seq`, and `notify_all()` only on a real new frame - encoding happens
 `_seq == last_seq`, so it never re-sends a frame, always gets the freshest one
 (stale intermediates are dropped, not queued), and idles at zero CPU/bytes on a
 static scene.
+
+Transport liveness: change-driven frames alone make a dead-but-open socket
+indistinguishable from an idle scene, so each handler emits a heartbeat - a
+zero-length application frame, i.e. a chunk of exactly `\\x00\\x00\\x00\\x00` -
+after `heartbeat_interval` seconds without a write. Clients skip it as a frame
+but treat any bytes as proof of life; a failed heartbeat write is how the
+server notices a departed client. Heartbeats come from the handler *threads*,
+so a heavy render blocking Blender's main thread does not read as dead. On
+`stop_server` each handler ends its response with the terminating HTTP chunk
+(`0\\r\\n\\r\\n` - unambiguous vs. the 4-byte heartbeat), so clients see a clean
+close instead of a parked socket.
 """
 
 import struct
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+# Seconds between transport-liveness writes on an idle connection. Overridable
+# per-server (tests use a short interval). See `_StreamHandler.do_GET` for the
+# actual cadence bound.
+HEARTBEAT_INTERVAL = 2.0
 
 
 class FrameHub:
@@ -96,16 +113,36 @@ class _StreamHandler(BaseHTTPRequestHandler):
         # Start one behind the current seq so the freshest existing frame (if any)
         # is delivered immediately on connect rather than waiting for the next one.
         last_seq = max(0, hub.latest_seq() - 1)
+        heartbeat_interval = self.server.heartbeat_interval
+        last_write = time.monotonic()
         try:
+            # Waking at half the heartbeat interval bounds the worst-case
+            # inter-heartbeat gap at 1.5x the interval (a wait can expire just
+            # before one is due, and only the next expiry sends it).
             while not self.server.stopping:
-                got = hub.wait_for(last_seq, timeout=1.0)
+                got = hub.wait_for(last_seq, timeout=heartbeat_interval / 2)
                 if got is None:
-                    continue  # timeout - loop to re-check `stopping`
+                    # Timeout - no new frame. Heartbeat if one is due: it keeps
+                    # an idle scene distinguishable from a dead server, and a
+                    # departed client raises out of the write (keeping
+                    # `client_count` accurate, which gates the capture pipeline).
+                    if time.monotonic() - last_write >= heartbeat_interval:
+                        self._write_chunk(struct.pack(">I", 0))
+                        last_write = time.monotonic()
+                    continue
                 last_seq, frame = got
                 if frame is None:
                     continue
                 payload = struct.pack(">I", len(frame)) + frame
                 self._write_chunk(payload)
+                last_write = time.monotonic()
+            # Stopping: end the response with the terminating chunk (`0\r\n\r\n`)
+            # so the client's reader sees a clean close immediately -
+            # `stop_server` only closes the *listening* socket, and keep-alive
+            # would otherwise park this handler waiting for a next request with
+            # the response never ended.
+            self._write_chunk(b"")
+            self.close_connection = True
         except (BrokenPipeError, ConnectionResetError, ValueError, OSError):
             # Client departed (closed the tab, navigated away) - drop it quietly.
             pass
@@ -118,9 +155,10 @@ class StreamServer(ThreadingHTTPServer):
     # Reuse the port immediately after a restart (avoids TIME_WAIT bind errors).
     allow_reuse_address = True
 
-    def __init__(self, host, port, hub):
+    def __init__(self, host, port, hub, heartbeat_interval=HEARTBEAT_INTERVAL):
         super().__init__((host, port), _StreamHandler)
         self.hub = hub
+        self.heartbeat_interval = heartbeat_interval
         self.stopping = False
 
 
@@ -130,10 +168,10 @@ def bind_host(listen_all):
     return "0.0.0.0" if listen_all else "127.0.0.1"
 
 
-def start_server(host, port, hub):
+def start_server(host, port, hub, heartbeat_interval=HEARTBEAT_INTERVAL):
     """Bind and serve on a background thread. Returns the running `StreamServer`
     (raises `OSError` if the port is taken)."""
-    server = StreamServer(host, port, hub)
+    server = StreamServer(host, port, hub, heartbeat_interval=heartbeat_interval)
     thread = threading.Thread(target=server.serve_forever, name="darkly-stream", daemon=True)
     thread.start()
     server._thread = thread

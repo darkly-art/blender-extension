@@ -45,13 +45,15 @@ Good to know:
 
 ## How it works
 
-The viewport source reads the previous completed frame from the viewport's own scene-render texture during a `'PRE_VIEW'` draw callback. That texture holds the scene with a transparent background and no overlays, and reading it adds no rendering (captures piggyback on redraws Blender performs anyway). The camera source draws into a `GPUOffScreen` once per frame. Either way, only that capture touches Blender's main thread: a worker thread un-premultiplies to straight alpha, applies the viewport's OCIO display transform (via Blender's bundled `PyOpenColorIO`), encodes a PNG with the bundled OpenImageIO, and publishes it to a stdlib `ThreadingHTTPServer`. `GET /stream` is a single long-lived HTTP/1.1 chunked response; each frame is `[4-byte big-endian length][PNG bytes]`.
+The viewport source reads the previous completed frame from the viewport's own scene-render texture during a `'PRE_VIEW'` draw callback. That texture holds the scene with a transparent background and no overlays, and reading it adds no rendering (captures piggyback on redraws Blender performs anyway); the pixels are scene-linear, so a worker thread un-premultiplies to straight alpha and applies the viewport's OCIO display transform (via Blender's bundled `PyOpenColorIO`). The camera source draws into a `GPUOffScreen` once per frame with the display transform applied on the GPU. Either way only that capture touches Blender's main thread: the worker encodes a PNG with the bundled OpenImageIO and publishes it to a stdlib `ThreadingHTTPServer`. `GET /stream` is a single long-lived HTTP/1.1 chunked response; each frame is `[4-byte big-endian length][PNG bytes]`.
+
+Frames are captured on the viewport's own redraws (Blender repaints for every progressive-render pass, shading switch, view move, and scene edit) and paced by a timer, then de-duplicated on the raw frame before encoding, so a progressive renderer like Cycles refines all the way to full quality instead of freezing at its first low-sample pass, and an idle scene costs nothing. Because frames only flow on a real change, liveness is signalled separately: after ~2 seconds without a write, each connection sends a heartbeat, a zero-length frame (just the 4-byte prefix). Clients skip heartbeats as frames but treat any bytes as proof the server is alive, and can declare a byte-silent connection dead. Stopping the stream ends every open response with the terminating HTTP chunk, so clients see a clean close immediately. If the add-on hits an internal error, it logs the traceback to the console, tears everything down (freeing the port), and shows the error in the panel; Start works again right away.
 
 ## Development
 
 Blender 5.1+ is the only requirement. The add-on bundles nothing and uses only libraries Blender ships (numpy, OpenImageIO, PyOpenColorIO).
 
-Unit tests need no Blender (the server, encode, readback, color management, and signature logic are all `bpy`-free):
+Unit tests need no Blender (the server, encode, readback, color management, and pacing/dedup logic are all `bpy`-free):
 
 ```bash
 python3 -m unittest discover -s tests
@@ -67,13 +69,16 @@ blender --background your_scene.blend --python-expr \
 ```
 darkly_stream/
   blender_manifest.toml  extension metadata (id, version, license)
-  __init__.py     register/unregister, Scene props, pacing timer + dedup + harvest
+  __init__.py     register/unregister, Scene props, operators, panel wiring
+  stream.py       StreamRuntime: redraw-observed capture, pacing timer, harvest, crash containment
+  pacing.py       per-tick capture/dirtiness + trailing-harvest decision (bpy-free)
+  lifecycle.py    exception-contained teardown steps (bpy-free)
   panel.py        View3D N-panel: Start/Stop, source, viewport, port, fps, camera, quality
   capture.py      viewport framebuffer readback (PRE_VIEW) + GPUOffScreen camera draw
   colormanage.py  scene-linear -> display transform via PyOpenColorIO (bpy-free)
   readback.py     gpu.Buffer -> numpy (bpy-free)
   encode.py       un-premultiply + display transform + PNG via OpenImageIO (bpy-free)
-  server.py       stdlib ThreadingHTTPServer chunked stream + seq/Condition dedup
+  server.py       stdlib ThreadingHTTPServer chunked stream + seq/Condition dedup + heartbeat
 tests/            unit tests for all of the above (no Blender needed)
 ```
 
