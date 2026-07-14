@@ -2,19 +2,20 @@ Darkly Stream - Blender add-on
 Copyright (c) 2026 Darkly Contributors
 
 This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU Affero General Public License as published
+it under the terms of the GNU General Public License as published
 by the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version (AGPL-3.0-or-later).
+(at your option) any later version (GPL-3.0-or-later).
 
 This program is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU Affero General Public License for more details.
+GNU General Public License for more details.
 
-You should have received a copy of the GNU Affero General Public License
+You should have received a copy of the GNU General Public License
 along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
-AGPL-3.0-or-later is compatible with the GNU GPL that Blender's Python API
-(`bpy`) is licensed under, so this add-on may be distributed alongside Blender.
-The full license text ships with the main Darkly repository and is available at
-the URL above.
+This add-on is licensed GPL-3.0-or-later so it can ship on Blender's
+extensions platform, which accepts only GPL-family licenses (add-ons link
+Blender's GPL Python API `bpy`). The wider Darkly project remains
+AGPL-3.0-or-later; only this add-on subtree is GPL. The full license text is
+available at the URL above.

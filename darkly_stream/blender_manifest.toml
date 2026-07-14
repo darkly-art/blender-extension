@@ -12,8 +12,9 @@ tags = ["Import-Export"]
 
 blender_version_min = "5.1.0"
 
-# AGPL-3.0, matching LICENSE.
-license = ["SPDX:AGPL-3.0-or-later"]
+# Blender's extension platform only accepts GPL-family licenses (add-ons link
+# Blender's GPL Python API); AGPL is rejected by the manifest validator.
+license = ["SPDX:GPL-3.0-or-later"]
 
 # Keep dev/build artifacts and tests out of the shipped zip.
 [build]

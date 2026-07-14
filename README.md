@@ -7,7 +7,7 @@
 ![Python](https://img.shields.io/badge/Python-000000?style=for-the-badge&logo=python&logoColor=6914ff)
 [![CI](https://img.shields.io/github/actions/workflow/status/darkly-art/blender-extension/ci.yml?branch=master&label=CI&logo=github&labelColor=black&logoColor=4400ff&style=for-the-badge&color=4400ff)](https://github.com/darkly-art/blender-extension/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/darkly-art/blender-extension?label=Release&logo=github&labelColor=black&logoColor=4400ff&style=for-the-badge&color=4400ff)](https://github.com/darkly-art/blender-extension/releases/latest)
-[![License](https://img.shields.io/badge/AGPL--3.0-000000?style=for-the-badge&label=License&labelColor=black&color=4400ff)](LICENSE)
+[![License](https://img.shields.io/badge/GPL--3.0-000000?style=for-the-badge&label=License&labelColor=black&color=4400ff)](LICENSE)
 
 Stream a live view of Blender into [Darkly](https://darkly.art) over localhost. The stream has a **transparent background**, so you can paint behind and around your 3D scene and treat Blender as just another layer.
 
@@ -92,4 +92,4 @@ The viewport-source mechanism (reading the previous frame's scene render from th
 
 ## License
 
-AGPL-3.0-or-later; see [LICENSE](LICENSE).
+GPL-3.0-or-later; see [LICENSE](LICENSE). (The wider Darkly project is AGPL-3.0-or-later; this add-on subtree is GPL so it can ship on Blender's extensions platform, which accepts only GPL-family licenses.)
