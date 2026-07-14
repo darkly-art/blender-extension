@@ -11,12 +11,16 @@
 
 Stream a live view of Blender into [Darkly](https://darkly.art) over localhost. The stream has a **transparent background**, so you can paint behind and around your 3D scene and treat Blender as just another layer.
 
-Two sources, chosen in the panel:
+It reuses Blender's own viewport render with zero extra work and streams it continuously over a single HTTP request, using only builtin libraries.
+
+https://github.com/user-attachments/assets/f92eec50-b2e7-4c4d-9967-1966d4df9037
+
+You can pick from two sources:
 
 - **Viewport** (default) streams whatever the 3D viewport shows, reusing pixels Blender already rendered.
 - **Camera** streams a camera's point of view regardless of where the viewport is looking, at the cost of one extra offscreen render per frame.
 
-Both stream the **viewport shading** (Solid / Material Preview / Rendered), not a final render. Set the shading mode to what you want to see in Darkly. Rendered shading with Cycles will be slow; EEVEE stays real-time.
+Both stream the **viewport shading** (Solid / Material Preview / Rendered), not a final render. Set the shading mode to what you want to see in Darkly.
 
 ## Install
 
@@ -41,15 +45,13 @@ Good to know:
 - **Streaming a Rendered view?** Tick **Film Transparency** in the panel so the world background drops out and only your geometry streams over Darkly's canvas. (Solid/Material shading is already excluded from the background automatically; this is the same setting as Render Properties > Film > Transparent, surfaced here for convenience.)
 - **Streaming Solid shading?** Untick **Object Outline** in the panel for clean edges. The workbench outline is drawn in the theme colour (black by default) straight into the streamed buffer, so it bakes a dark fringe into anti-aliased silhouettes when composited over Darkly's canvas. This is the same setting as Viewport Shading > Options > Object Outline, surfaced here for convenience.
 - It's safe to leave the stream running; nothing is captured or sent while the scene is unchanged or no client is connected.
-- If streaming slows Blender down, shrink the viewport or lower the FPS. **Benchmark Capture** in the panel times the capture and encode on your machine.
+- If streaming slows Blender down, try lowering the FPS.
 - **Works offline.** No internet connections are made and Blender's **Allow Online Access** setting is not required; the stream is served on localhost only. To stream to a different machine, check **All Interfaces** and point the void at `http://<this machine's IP>:8765/stream`.
 - If your browser blocks an `https://` Darkly page from reaching `http://localhost` (mixed content), run Darkly from `http://localhost`.
 
 ## How it works
 
-The viewport source reads the previous completed frame from the viewport's own scene-render texture during a `'PRE_VIEW'` draw callback. That texture holds the scene with a transparent background and no overlays, and reading it adds no rendering (captures piggyback on redraws Blender performs anyway); the pixels are scene-linear, so a worker thread un-premultiplies to straight alpha and applies the viewport's OCIO display transform (via Blender's bundled `PyOpenColorIO`). The camera source draws into a `GPUOffScreen` once per frame with the display transform applied on the GPU. Either way only that capture touches Blender's main thread: the worker encodes a PNG with the bundled OpenImageIO and publishes it to a stdlib `ThreadingHTTPServer`. `GET /stream` is a single long-lived HTTP/1.1 chunked response; each frame is `[4-byte big-endian length][PNG bytes]`.
-
-Frames are captured on the viewport's own redraws (Blender repaints for every progressive-render pass, shading switch, view move, and scene edit) and paced by a timer, then de-duplicated on the raw frame before encoding, so a progressive renderer like Cycles refines all the way to full quality instead of freezing at its first low-sample pass, and an idle scene costs nothing. Because frames only flow on a real change, liveness is signalled separately: after ~2 seconds without a write, each connection sends a heartbeat, a zero-length frame (just the 4-byte prefix). Clients skip heartbeats as frames but treat any bytes as proof the server is alive, and can declare a byte-silent connection dead. Stopping the stream ends every open response with the terminating HTTP chunk, so clients see a clean close immediately. If the add-on hits an internal error, it logs the traceback to the console, tears everything down (freeing the port), and shows the error in the panel; Start works again right away.
+The viewport source grabs the last rendered frame straight from the viewport's own texture (transparent background, no overlays), so it adds no extra rendering; the camera source draws into an offscreen buffer instead. A capture is triggered whenever Blender repaints (a render pass, a view move, a scene edit), paced by a timer, and dropped if identical to the last — so a progressive renderer like Cycles keeps refining to full quality while an idle scene costs nothing. Only that grab runs on Blender's main thread; a worker thread does the color conversion and encodes a PNG. It's served at `GET /stream` as one long-lived HTTP/1.1 chunked response, each frame framed as `[4-byte big-endian length][PNG bytes]`, with a zero-length heartbeat after ~2 seconds of silence so clients can tell a quiet stream from a dead one.
 
 ## Development
 

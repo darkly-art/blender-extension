@@ -58,7 +58,6 @@ panel. The teardown context matters:
 import logging
 import os
 import threading
-import time
 
 import bpy
 
@@ -134,8 +133,6 @@ class StreamRuntime:
         self.redraw_seen = False
         self.needs_render = True
         self.harvest_owed = False
-        self.last_draw_ms = 0.0
-        self.last_encode_ms = 0.0
 
         # Timer -> draw-handler handoff: the tick requests a capture and the
         # handler for the selected viewport services it.
@@ -383,8 +380,7 @@ class StreamRuntime:
         # Steady-state status must be *stable*: `set_status` forces a redraw on
         # any text change, and the draw handler turns any external redraw into a
         # capture, so a per-capture status (fluctuating ms timings) would spin a
-        # self-sustaining capture loop on a static scene. The timings live in
-        # the Profile print instead.
+        # self-sustaining capture loop on a static scene.
         self.set_status(f"Streaming - {self.hub.client_count} client(s)")
 
         # Type-owned dirtiness: the viewport source is dirty on a redraw of the
@@ -464,23 +460,15 @@ class StreamRuntime:
         # Claim the request before capturing so a redraw storm can't double-capture.
         self.capture_pending = False
 
-        t0 = time.perf_counter()
         result = self.cap.capture(scene, props, space, region)
         if result is None:
             return
-        self.last_draw_ms = (time.perf_counter() - t0) * 1000.0
 
         # Hand the raw pixels to the worker (latest wins; a slow encode never
         # backs up the main thread - stale frames are simply overwritten).
         with self.encode_cond:
             self.pending_frame = result
             self.encode_cond.notify()
-
-        if props.profile:
-            print(
-                f"[darkly_stream] capture {self.last_draw_ms:.1f}ms "
-                f"encode {self.last_encode_ms:.1f}ms (worker) ({result[0]}x{result[1]})"
-            )
 
     def _encode_worker(self):
         """Worker thread: drain the latest captured frame, drop it if it's a
@@ -513,10 +501,8 @@ class StreamRuntime:
                 ):
                     continue
 
-                t0 = time.perf_counter()
                 try:
                     frame = self.encoder.encode(width, height, rgba, view_settings)
-                    self.last_encode_ms = (time.perf_counter() - t0) * 1000.0
                     self.hub.publish(frame)
                     prev_rgba = rgba
                     prev_view_settings = view_settings

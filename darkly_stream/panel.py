@@ -64,14 +64,6 @@ class DARKLY_PT_stream_panel(bpy.types.Panel):
             shading = context.scene.display.shading
         layout.prop(shading, "show_object_outline", text="Object Outline")
 
-        # Profiling can be toggled live while streaming.
-        layout.prop(props, "profile")
-
-        # Stream-independent profiling: times the pipeline directly and reports
-        # to the status bar + console. Needs an open 3D viewport (and a camera,
-        # for the camera source), but no server or client.
-        layout.operator("darkly.stream_benchmark", icon="TIME")
-
         if running:
             url = f"http://localhost:{props.port}/stream"
             layout.label(text=url, icon="URL")

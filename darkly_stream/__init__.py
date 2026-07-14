@@ -14,11 +14,9 @@ This module holds the Blender registration surface: properties, operators,
 panel, and the re-exported module API.
 """
 
-import time
-
 import bpy
 
-from . import stream, capture, encode
+from . import capture
 
 # Public module API, used by `panel.py` and external drivers (the headless
 # smoke test). The implementation lives on the `stream._runtime` singleton.
@@ -110,11 +108,6 @@ class DarklyStreamProperties(bpy.types.PropertyGroup):
         poll=lambda _self, obj: obj.type == "CAMERA",
         description="Camera to stream (defaults to the scene's active camera)",
     )
-    profile: bpy.props.BoolProperty(
-        name="Profile",
-        default=False,
-        description="Print per-stage timings (capture vs encode) to the console",
-    )
 
 
 class DARKLY_OT_stream_start(bpy.types.Operator):
@@ -140,127 +133,12 @@ class DARKLY_OT_stream_stop(bpy.types.Operator):
         return {"FINISHED"}
 
 
-class DARKLY_OT_stream_benchmark(bpy.types.Operator):
-    """Measure the Blender-side cost with no server or client involved.
-
-    Runs the exact capture and encode pipeline the stream runs - for the
-    *selected source* - `iterations` times, and reports per-stage timings,
-    fully decoupled from whether the HTTP stream works, so the main-thread cost
-    can be profiled on its own.
-
-    It is *modal*, not blocking: GPU capture needs a live GPU context, which
-    only a viewport draw callback provides (see `StreamRuntime`), so each
-    sample is taken inside a temporary draw handler (of the source's own
-    event type) driven across viewport redraws by a window timer. A blocking
-    loop can't work - there is no GPU context to draw into between redraws."""
-
-    bl_idname = "darkly.stream_benchmark"
-    bl_label = "Benchmark Capture"
-    bl_description = "Time the capture + encode pipeline directly (no stream needed)"
-
-    iterations: bpy.props.IntProperty(
-        name="Iterations", default=30, min=1, max=500,
-        description="How many frames to time",
-    )
-
-    def invoke(self, context, _event):
-        scene = context.scene
-        props = scene.darkly_stream
-
-        self._cap = capture.SOURCES[props.source]()
-        err = self._cap.poll(scene, props)
-        if err is not None:
-            self.report({"ERROR"}, err)
-            return {"CANCELLED"}
-        target_space = capture.find_view3d(props.viewport)[0]
-        if target_space is None:
-            self.report({"ERROR"}, "Open a 3D viewport to benchmark")
-            return {"CANCELLED"}
-        self._target_space = target_space.as_pointer()
-
-        self._scene = scene
-        self._props = props
-        self._enc = encode.FrameEncoder(
-            compression=props.compression, ocio_config_path=stream.ocio_config_path()
-        )
-        self._draw_ms = []
-        self._encode_ms = []
-        self._size = (0, 0)
-        self._pending = True
-
-        self._handler = bpy.types.SpaceView3D.draw_handler_add(
-            self._sample, (), "WINDOW", self._cap.draw_handler_type
-        )
-        self._timer = context.window_manager.event_timer_add(0.001, window=context.window)
-        context.window_manager.modal_handler_add(self)
-        stream.request_redraw()
-        return {"RUNNING_MODAL"}
-
-    def _sample(self):
-        """Draw callback: take one timed capture+encode in a live GPU context."""
-        if not self._pending:
-            return
-        ctx = bpy.context
-        space = ctx.space_data
-        region = ctx.region
-        if space is None or getattr(space, "type", None) != "VIEW_3D" or region is None:
-            return
-        if space.as_pointer() != self._target_space:
-            return
-        self._pending = False
-        t0 = time.perf_counter()
-        result = self._cap.capture(self._scene, self._props, space, region)
-        t1 = time.perf_counter()
-        if result is None:
-            return
-        width, height, rgba, view_settings = result
-        self._enc.encode(width, height, rgba, view_settings)
-        t2 = time.perf_counter()
-        self._draw_ms.append((t1 - t0) * 1000.0)
-        self._encode_ms.append((t2 - t1) * 1000.0)
-        self._size = (width, height)
-
-    def modal(self, context, event):
-        if event.type != "TIMER":
-            return {"PASS_THROUGH"}
-        if len(self._draw_ms) >= self.iterations:
-            return self._finish(context)
-        if not self._pending:
-            self._pending = True
-            stream.request_redraw()
-        return {"PASS_THROUGH"}
-
-    def _finish(self, context):
-        context.window_manager.event_timer_remove(self._timer)
-        bpy.types.SpaceView3D.draw_handler_remove(self._handler, "WINDOW")
-        self._cap.free()
-        self._enc.free()
-
-        def avg(xs):
-            return sum(xs) / len(xs)
-
-        width, height = self._size
-        d_avg, e_avg = avg(self._draw_ms), avg(self._encode_ms)
-        total = d_avg + e_avg
-        ceiling = 1000.0 / total if total > 0 else 0.0
-        summary = (
-            f"{len(self._draw_ms)}x {width}x{height}: "
-            f"capture avg {d_avg:.1f}ms (max {max(self._draw_ms):.1f}), "
-            f"encode avg {e_avg:.1f}ms (max {max(self._encode_ms):.1f}), "
-            f"total {total:.1f}ms/frame -> ~{ceiling:.0f} fps ceiling"
-        )
-        print(f"[darkly_stream] benchmark {summary}")
-        self.report({"INFO"}, summary)
-        return {"FINISHED"}
-
-
 from .panel import DARKLY_PT_stream_panel  # noqa: E402 - after operator defs
 
 _CLASSES = (
     DarklyStreamProperties,
     DARKLY_OT_stream_start,
     DARKLY_OT_stream_stop,
-    DARKLY_OT_stream_benchmark,
     DARKLY_PT_stream_panel,
 )
 
