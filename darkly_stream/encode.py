@@ -15,7 +15,13 @@ Accepts both pixel semantics the capture sources produce (`capture.py`):
 
 Both are un-premultiplied to straight alpha first (for float input this must
 precede the display transform - transforming premultiplied colour would darken
-edges), then flipped, quantized, and written.
+edges), then flipped, quantized, and written. The inverse depends on the source's
+edge convention (`_unpremultiply`): EEVEE / Cycles edges are premultiplied once
+(`rgb / alpha`), while the workbench viewport (Solid / Wireframe) accumulates AA
+edge RGB in log2 space, so a coverage-`c` edge is stored `rgb = (colour+1)**c - 1`
+and needs the matching `(rgb + 1)**(1/alpha) - 1` inverse - carried by the
+`ViewSettings.workbench_aa` flag - or a plain divide leaves a dark silhouette
+fringe.
 
 Why PNG, not WebP: OIIO's WebP writer does a slow high-effort/lossless encode
 (measured ~2.5s per 720p frame), which pegs a core and caps the stream. libpng at
@@ -77,15 +83,12 @@ class FrameEncoder:
         with it."""
         if rgba.dtype == np.uint8:
             arr = rgba.reshape(height, width, 4).astype(np.float32) / 255.0
+            workbench_aa = False
         else:
             arr = rgba.reshape(height, width, 4)
+            workbench_aa = view_settings is not None and view_settings.workbench_aa
 
-        alpha = arr[..., 3:4]
-        # Un-premultiply: divide colour by alpha where alpha > 0, else 0.
-        straight = np.empty_like(arr)
-        np.divide(arr[..., :3], alpha, out=straight[..., :3], where=alpha > 0.0)
-        straight[..., :3] = np.where(alpha > 0.0, straight[..., :3], 0.0)
-        straight[..., 3:4] = alpha
+        straight = _unpremultiply(arr, workbench_aa)
 
         if rgba.dtype != np.uint8:
             self._display.apply(straight, view_settings or _SRGB_FALLBACK)
@@ -113,6 +116,43 @@ class FrameEncoder:
                 os.remove(self._temp_path)
         except OSError:
             pass
+
+
+def _unpremultiply(arr, workbench_aa):
+    """Associated (premultiplied) -> straight alpha, colour set to 0 where alpha
+    is 0. `arr` is `(H, W, 4)` float32; a new array is returned. Alpha is the
+    linear coverage on both paths and is emitted unchanged.
+
+    `workbench_aa` picks the inverse for the source's edge convention:
+
+      - False (EEVEE / Cycles, and all uint8 camera frames): edges are
+        premultiplied once, so `rgb / alpha` recovers the straight colour.
+      - True (workbench: Solid / Wireframe / workbench-Rendered): workbench's
+        viewport anti-aliasing accumulates edge RGB in log2 space - its TAA
+        writes `color.rgb = log2(color.rgb + 1)`
+        (`workbench_effect_taa_frag.glsl:22`) and its SMAA resolve divides by
+        the accumulated weight in that space and reads back `exp2(rgb) - 1`
+        (`workbench_effect_smaa_frag.glsl:39-41`), alpha never wrapped. So a
+        coverage-`c` silhouette edge is stored `rgb = (colour+1)**c - 1`,
+        `alpha = c`, and the exact inverse of the log2 blend is
+        `colour = (rgb + 1)**(1/alpha) - 1`. It is stable as alpha -> 0
+        (`rgb -> 0`, so the base -> 1, so `colour -> 0`) and is the identity at
+        `alpha == 1`, so only partial-coverage edges are touched.
+    """
+    alpha = arr[..., 3:4]
+    rgb = arr[..., :3]
+    mask = alpha > 0.0
+    straight = np.empty_like(arr)
+    if workbench_aa:
+        base = np.maximum(rgb + 1.0, np.finfo(np.float32).tiny)
+        inv_alpha = np.divide(1.0, alpha, out=np.zeros_like(alpha), where=mask)
+        recovered = np.power(base, inv_alpha) - 1.0
+        straight[..., :3] = np.where(mask, recovered, 0.0)
+    else:
+        np.divide(rgb, alpha, out=straight[..., :3], where=mask)
+        straight[..., :3] = np.where(mask, straight[..., :3], 0.0)
+    straight[..., 3:4] = alpha
+    return straight
 
 
 def frame_is_duplicate(rgba, view_settings, prev_rgba, prev_view_settings):

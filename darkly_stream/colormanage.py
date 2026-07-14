@@ -51,6 +51,13 @@ class ViewSettings:
     look: str | None
     exposure: float
     gamma: float
+    # True when the workbench engine drew this frame (Solid / Wireframe, or
+    # Rendered under BLENDER_WORKBENCH). Workbench accumulates viewport
+    # anti-aliasing edge RGB in log2 space, so a coverage-`c` silhouette edge
+    # arrives as `rgb = (colour+1)**c - 1`, `alpha = c`; the encoder applies the
+    # matching inverse instead of the plain `rgb/alpha` (see `_unpremultiply`).
+    # EEVEE / Cycles edges are premultiplied once -> False.
+    workbench_aa: bool = False
 
 
 def view_settings_snapshot(scene, shading):
@@ -69,6 +76,13 @@ def view_settings_snapshot(scene, shading):
     view = scene.view_settings
     look = view.look if view.look and view.look != "None" else None
 
+    # The workbench engine (Solid / Wireframe, or Rendered under BLENDER_WORKBENCH)
+    # over-premultiplies viewport edges via its log2 AA; EEVEE-driven Material /
+    # Rendered do not.
+    workbench_aa = mode in ("SOLID", "WIREFRAME") or (
+        use_workbench and mode == "RENDERED"
+    )
+
     if (use_workbench and mode == "RENDERED") or use_scene_lights or use_scene_world:
         return ViewSettings(
             display=display,
@@ -76,6 +90,7 @@ def view_settings_snapshot(scene, shading):
             look=look,
             exposure=float(view.exposure),
             gamma=float(view.gamma),
+            workbench_aa=workbench_aa,
         )
     if mode in ("MATERIAL", "RENDERED"):
         # View transform + look only; exposure depends on scene light intensity,
@@ -86,9 +101,11 @@ def view_settings_snapshot(scene, shading):
             look=look,
             exposure=0.0,
             gamma=1.0,
+            workbench_aa=workbench_aa,
         )
     return ViewSettings(
-        display=display, view_transform=None, look=None, exposure=0.0, gamma=1.0
+        display=display, view_transform=None, look=None, exposure=0.0, gamma=1.0,
+        workbench_aa=workbench_aa,
     )
 
 

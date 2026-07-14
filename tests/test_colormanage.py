@@ -85,6 +85,22 @@ class SnapshotTest(unittest.TestCase):
         )
         self.assertIsNone(vs.look)
 
+    def test_workbench_aa_flag_tracks_workbench_engine(self):
+        # Workbench (Solid / Wireframe, and Rendered under the workbench engine)
+        # over-premultiplies viewport edges via its log2 AA, so the encoder must
+        # apply the workbench inverse. EEVEE / Cycles edges are premultiplied
+        # once (plain divide).
+        def snap(mode, engine="BLENDER_EEVEE_NEXT", **flags):
+            return colormanage.view_settings_snapshot(
+                fake_scene(engine=engine), fake_shading(mode, **flags)
+            )
+
+        self.assertTrue(snap("SOLID").workbench_aa)
+        self.assertTrue(snap("WIREFRAME").workbench_aa)
+        self.assertTrue(snap("RENDERED", engine="BLENDER_WORKBENCH").workbench_aa)
+        self.assertFalse(snap("MATERIAL").workbench_aa)
+        self.assertFalse(snap("RENDERED", use_scene_lights_render=True).workbench_aa)
+
 
 class FallbackTransformTest(unittest.TestCase):
     """DisplayTransform without any OCIO config: sRGB curve + exposure/gamma."""

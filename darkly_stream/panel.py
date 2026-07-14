@@ -42,6 +42,28 @@ class DARKLY_PT_stream_panel(bpy.types.Panel):
         col.prop(props, "fps")
         col.prop(props, "compression")
 
+        # Film transparency (a scene render setting) makes Rendered-mode output
+        # transparent, so Darkly composites the 3D view over the canvas instead
+        # of the world background - the transparent-background premise the whole
+        # add-on is built on. Mirrored here for convenience (it otherwise lives
+        # in Render Properties > Film) as a live toggle: it takes effect on the
+        # next redraw, so it's safe to flip while streaming.
+        layout.prop(context.scene.render, "film_transparent", text="Film Transparency")
+
+        # Object Outline (a Solid-shading setting) is drawn by the workbench
+        # engine straight into the captured scene colour buffer, in the theme
+        # outline colour (black by default), baking black pixels into the
+        # anti-aliased silhouette alpha edge - a dark fringe when Darkly
+        # composites the stream. Turn it off for clean compositing. Mirrored
+        # here (it otherwise lives in Viewport Shading > Options) as a live
+        # toggle that takes effect on the next redraw. Blender keeps the
+        # displayed workbench shading on the space normally, but on the scene's
+        # display when the viewport is Rendered under BLENDER_WORKBENCH.
+        shading = context.space_data.shading
+        if shading.type == "RENDERED" and context.scene.render.engine == "BLENDER_WORKBENCH":
+            shading = context.scene.display.shading
+        layout.prop(shading, "show_object_outline", text="Object Outline")
+
         # Profiling can be toggled live while streaming.
         layout.prop(props, "profile")
 

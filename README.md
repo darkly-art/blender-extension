@@ -38,6 +38,8 @@ blender --command extension install-file --repo user_default --enable dist/darkl
 Good to know:
 
 - **Keep at least one 3D viewport open.** With several open, the **Viewport** dropdown picks which one to stream (*Auto* = the first).
+- **Streaming a Rendered view?** Tick **Film Transparency** in the panel so the world background drops out and only your geometry streams over Darkly's canvas. (Solid/Material shading is already excluded from the background automatically; this is the same setting as Render Properties > Film > Transparent, surfaced here for convenience.)
+- **Streaming Solid shading?** Untick **Object Outline** in the panel for clean edges. The workbench outline is drawn in the theme colour (black by default) straight into the streamed buffer, so it bakes a dark fringe into anti-aliased silhouettes when composited over Darkly's canvas. This is the same setting as Viewport Shading > Options > Object Outline, surfaced here for convenience.
 - It's safe to leave the stream running; nothing is captured or sent while the scene is unchanged or no client is connected.
 - If streaming slows Blender down, shrink the viewport or lower the FPS. **Benchmark Capture** in the panel times the capture and encode on your machine.
 - **Works offline.** No internet connections are made and Blender's **Allow Online Access** setting is not required; the stream is served on localhost only. To stream to a different machine, check **All Interfaces** and point the void at `http://<this machine's IP>:8765/stream`.

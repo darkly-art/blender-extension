@@ -151,5 +151,55 @@ class FloatEncodeTest(unittest.TestCase):
         np.testing.assert_allclose(rgb_half, rgb_opaque, atol=1)
 
 
+class WorkbenchAAEdgeTest(unittest.TestCase):
+    """Workbench (Solid / Wireframe) accumulates viewport AA edge RGB in log2
+    space, so a coverage-`c` silhouette edge arrives as `rgb = (color+1)**c - 1`,
+    `alpha = c`. With `workbench_aa` set the encoder applies the matching inverse
+    `(rgb + 1)**(1/alpha) - 1` and recovers the true edge colour; a plain
+    `rgb/alpha` divide leaves an over-premultiplied, darkening edge - the fringe."""
+
+    def setUp(self):
+        self.enc = encode.FrameEncoder(compression=1)  # no OCIO -> sRGB fallback
+
+    def tearDown(self):
+        self.enc.free()
+
+    def _settings(self, workbench_aa):
+        return colormanage.ViewSettings(
+            display="sRGB", view_transform=None, look=None,
+            exposure=0.0, gamma=1.0, workbench_aa=workbench_aa,
+        )
+
+    def _workbench_edge(self, color, cov):
+        rgb = (color + 1.0) ** cov - 1.0
+        return np.array([[[rgb, rgb, rgb, cov]]], np.float32)
+
+    def test_workbench_edge_recovers_true_colour(self):
+        color, cov = 0.8, 0.5
+        decoded = decode_png(
+            self.enc.encode(1, 1, self._workbench_edge(color, cov), self._settings(True))
+        )
+        expected = round(float(colormanage.linear_to_srgb(np.array([color]))[0]) * 255.0)
+        self.assertEqual(int(decoded[0, 0, 3]), round(cov * 255))  # alpha = coverage, unchanged
+        self.assertLessEqual(abs(int(decoded[0, 0, 0]) - expected), 2)
+
+    def test_plain_divide_leaves_the_dark_fringe(self):
+        # Pins the branch: the SAME edge on the plain (EEVEE) path stays
+        # over-premultiplied and decodes well below the true colour.
+        color, cov = 0.8, 0.5
+        frame = self._workbench_edge(color, cov)
+        decoded = decode_png(self.enc.encode(1, 1, frame, self._settings(False)))
+        true_srgb = round(float(colormanage.linear_to_srgb(np.array([color]))[0]) * 255.0)
+        self.assertLess(int(decoded[0, 0, 0]), true_srgb - 5)
+
+    def test_opaque_pixel_is_untouched_by_workbench_path(self):
+        # At alpha == 1 the inverse is the identity, so full-coverage interior
+        # colour is unchanged whether or not the flag is set.
+        opaque = np.array([[[0.5, 0.5, 0.5, 1.0]]], np.float32)
+        on = decode_png(self.enc.encode(1, 1, opaque.copy(), self._settings(True)))
+        off = decode_png(self.enc.encode(1, 1, opaque.copy(), self._settings(False)))
+        np.testing.assert_array_equal(on, off)
+
+
 if __name__ == "__main__":
     unittest.main()
