@@ -1,16 +1,21 @@
 """Stream runtime - lifecycle, pacing, capture handoff, and crash containment.
 
-Threading / context model: GPU capture needs a live GPU context, which only a
-viewport draw callback provides - a `bpy.app.timers` tick has none. So a timer
-paces the stream and, when a frame is due, tags the viewport for redraw; a draw
-handler (registered under the event the active source needs - `'PRE_VIEW'` or
-`'POST_PIXEL'`) then does the capture on the main thread inside that live
-context and hands the raw pixels to a worker thread. The worker does the
-(bpy-free) display transform + PNG encode and publishes to the server. Keeping
-that work off the main thread is what makes the add-on cheap enough to leave
-Blender responsive. The stdlib HTTP server serves the bytes from its own handler
-threads. Handoff goes through `server.FrameHub` (worker -> clients) and a
-single-slot latest-frame handoff (main -> worker).
+Subprocess / context model: the serve/encode pipeline runs in a **helper
+subprocess** (`helper.py`), launched by `bridge.HelperProcess` with Blender's
+bundled Python and talking over its own stdin (frames in) and stdout (events
+out). The Blender process itself is **main-thread only** - it imports no
+`threading` and no `queue` (the reviewer's hard constraint). What stays here:
+
+GPU capture needs a live GPU context, which only a viewport draw callback
+provides - a `bpy.app.timers` tick has none. So a timer paces the stream and,
+when a frame is due, tags the viewport for redraw; a draw handler (registered
+under the event the active source needs - `'PRE_VIEW'` or `'POST_PIXEL'`) then
+does the capture on the main thread inside that live context, drops raw
+duplicates (`dedup`), and hands the raw pixels to the helper as a zero-copy
+memoryview over its non-blocking stdin pipe (`bridge.send_frame`). The helper
+does the (bpy-free) display transform + PNG encode and serves the bytes over
+HTTP. Pipe I/O is non-blocking and pumped from the timer tick and the draw
+handler (`bridge.pump`), so nothing parks Blender's main thread.
 
 Change detection is redraw-observed, not signature-gated. Blender redraws the
 streamed viewport for every event that changes the output - each Cycles
@@ -22,51 +27,58 @@ requested capture, just sets `redraw_seen`; the tick turns that (type-owned via
 `capture.is_dirty`) into a paced capture. See `pacing.plan_capture` for the
 per-tick decision.
 
-De-duplication is a single raw-buffer compare on the worker, *before* the
-expensive encode (`encode.frame_is_duplicate`): raw-identical pixels under
-identical `ViewSettings` encode to identical PNG bytes, so a redundant frame
-(an incidental hover redraw, a converged scene's trailing harvest) is dropped
-without an encode, while every distinct-looking frame is published. The
-transport still coalesces on `FrameHub` seq and the frontend decodes only new
-frames, but those are downstream of this compare, not the primary gate.
+De-duplication is a single raw-buffer compare on the main thread, *before* the
+frame is sent (`dedup.frame_is_duplicate`): raw-identical pixels under identical
+`ViewSettings` encode to identical PNG bytes, so a redundant frame (an
+incidental hover redraw, a converged scene's trailing harvest) is dropped
+without a ~15 MB pipe transfer or an encode, while every distinct-looking frame
+is sent. The transport still coalesces on the helper's `FrameHub` seq and the
+frontend decodes only new frames, but those are downstream of this compare, not
+the primary gate. `prev_rgba`/`prev_view_settings` hold the last sent frame; a
+helper `encode_error` (the frame was never published) clears them so the next
+identical capture isn't wrongly dropped.
 
 Trailing harvest: the viewport source reads the *previous* completed frame
 (see `capture.py`), so after the last change one extra capture is owed to
 harvest the final state - `harvest_owed` below, armed and spent in
 `pacing.plan_capture` so a converged scene stops instead of redrawing forever.
 That harvest is main-thread and dedup-independent: it is owed and spent by the
-tick regardless of whether the worker later drops the frame as a duplicate.
+tick regardless of whether the frame is later dropped as a duplicate.
 
 Failure model: every Blender-invoked entry point is exception-contained, and
 failure in any of them converges on `StreamRuntime.fail` - full teardown (the
 port MUST come back; see `lifecycle.run_guarded`) plus an error status in the
-panel. The teardown context matters:
+panel. Closing the helper's stdin gives it EOF, so it ends its HTTP responses
+and exits, freeing the port; a Blender crash produces the same EOF. The
+teardown context matters:
 
 - The timer tick is the only safe place to tear down from: it may unregister
   the draw handler, and stopping from inside it returns `None` - Blender's own
   unregistration path - instead of calling `timers.unregister` on the
   currently-executing callback.
-- The draw handler and encode worker must NOT tear down from inside themselves
-  (a draw handler can't remove itself mid-draw; the worker would join itself).
-  They log immediately and record the exception in `pending_failure`; the next
-  tick consumes it and fails properly.
-- The tick also watchdogs the worker and server threads, so a thread that died
-  without leaving a record still surfaces as a loud failure instead of a
+- The draw handler must NOT tear down from inside itself (it can't remove
+  itself mid-draw). It logs immediately and records the exception in
+  `pending_failure`; the next tick consumes it and fails properly. A broken
+  pipe there sets a dead flag rather than raising, so the draw never tears down.
+- The tick watchdogs the helper (`alive`, `stalled`), so a child that died or
+  wedged without leaving a record still surfaces as a loud failure instead of a
   silently frozen stream.
 """
 
 import logging
 import os
-import threading
 
 import bpy
 
 from bpy.app.handlers import persistent
 
-from . import server, capture, encode, pacing
+from . import capture, pacing, bridge, dedup
 from .lifecycle import run_guarded
 
 log = logging.getLogger(__name__)
+
+# The helper subprocess entry point, launched with `sys.executable`.
+_HELPER_PATH = os.path.join(os.path.dirname(__file__), "helper.py")
 
 
 def request_redraw():
@@ -82,7 +94,7 @@ def request_redraw():
 
 
 def ocio_config_path():
-    """Blender's bundled OCIO config, for the worker-side display transform.
+    """Blender's bundled OCIO config, for the helper-side display transform.
     `None` (-> sRGB fallback) if the layout ever changes."""
     path = os.path.join(
         bpy.utils.system_resource("DATAFILES"), "colormanagement", "config.ocio"
@@ -103,9 +115,9 @@ def _on_depsgraph_update(_scene, _depsgraph):
 
 
 class StreamRuntime:
-    """Everything one running stream owns: server, capture source, encoder,
-    worker thread, Blender handler registrations, and pacing/dedup state.
-    One per process (see the module-level singleton below)."""
+    """Everything one running stream owns: the helper subprocess, capture
+    source, Blender handler registrations, and pacing/dedup state. One per
+    process (see the module-level singleton below)."""
 
     def __init__(self):
         # `bpy.app.timers` and `draw_handler_add`/`_remove` identify callbacks
@@ -115,15 +127,17 @@ class StreamRuntime:
         self._timer_fn = self._timer_tick
         self._draw_fn = self._draw_handler_cb
 
-        self.hub = None
-        self.srv = None
+        self.helper = None
         self.cap = None
-        self.encoder = None
         self.running = False
-        # Set by `fail` (and a failed bind); keeps the error status pinned in
-        # the panel until the next successful start.
+        # Set by `fail` (and a failed spawn/bind); keeps the error status pinned
+        # in the panel until the next successful start.
         self.failed = False
         self.status = "Stopped"
+
+        # Cached connected-client count, updated from the helper's `clients`
+        # events. Gates the whole capture pipeline (zero cost with no client).
+        self.client_count = 0
 
         # Pacing / dirtiness (see module docstring).
         # `redraw_seen` is the redraw-observer bit: the draw handler sets it
@@ -144,16 +158,14 @@ class StreamRuntime:
         # the captured pixels always come from the same viewport.
         self.target_space = None
 
-        # Main-thread -> worker handoff: a single latest-frame slot (stale
-        # frames are dropped, never queued) plus the worker that drains it.
-        self.encode_cond = threading.Condition()
-        self.pending_frame = None  # (width, height, rgba, view_settings) | None
-        self.worker_thread = None
-        self.worker_stop = False
+        # Last sent frame, for the pre-send raw-duplicate compare. Cleared on a
+        # helper `encode_error` (that frame was never published).
+        self.prev_rgba = None
+        self.prev_view_settings = None
 
-        # An exception recorded by the draw handler or encode worker - contexts
-        # that must not tear down from inside themselves - consumed by the next
-        # timer tick, the one safe place to fail from.
+        # An exception recorded by the draw handler - a context that must not
+        # tear down from inside itself - consumed by the next timer tick, the
+        # one safe place to fail from.
         self.pending_failure = None
 
     # --- status ---
@@ -169,19 +181,18 @@ class StreamRuntime:
         keeps Stop reachable while this is true, so a half-failed stop can
         always be retried instead of restarting Blender."""
         return (
-            self.srv is not None
+            self.helper is not None
             or self.draw_handler is not None
-            or self.worker_thread is not None
             or self.cap is not None
-            or self.encoder is not None
         )
 
     # --- lifecycle ---
 
     def start(self, scene):
-        """Bind the server and spin up the pipeline. Returns an error string,
-        or `None` on success. The port bind comes first so its (common,
-        user-fixable) failure allocates nothing else."""
+        """Spawn the helper and register the capture pipeline. Returns an error
+        string, or `None` on success. The helper binds the port first so its
+        (common, user-fixable) failure surfaces synchronously and allocates
+        nothing else here."""
         if self.running:
             return None
 
@@ -193,20 +204,22 @@ class StreamRuntime:
         # internet access).
 
         props = scene.darkly_stream
-        hub = server.FrameHub()
-        try:
-            srv = server.start_server(server.bind_host(props.listen_all), props.port, hub)
-        except OSError as exc:
-            self.failed = True
-            self.set_status(f"Could not bind port {props.port}: {exc}")
-            return str(exc)
-
-        self.hub = hub
-        self.srv = srv
-        self.cap = capture.SOURCES[props.source]()
-        self.encoder = encode.FrameEncoder(
-            compression=props.compression, ocio_config_path=ocio_config_path()
+        self.helper = bridge.HelperProcess()
+        err = self.helper.spawn(
+            _HELPER_PATH,
+            bridge.bind_host(props.listen_all),
+            props.port,
+            props.compression,
+            ocio_config_path(),
         )
+        if err is not None:
+            self.failed = True
+            self.set_status(err)
+            self.helper.close()
+            self.helper = None
+            return err
+
+        self.cap = capture.SOURCES[props.source]()
         self.running = True
         self.failed = False
         self.pending_failure = None
@@ -215,14 +228,9 @@ class StreamRuntime:
         self.harvest_owed = False
         self.capture_pending = False
         self.target_space = None
-
-        # Start the encode worker (drains the main-thread -> worker slot).
-        self.worker_stop = False
-        self.pending_frame = None
-        self.worker_thread = threading.Thread(
-            target=self._encode_worker, name="darkly-encode", daemon=True
-        )
-        self.worker_thread.start()
+        self.client_count = 0
+        self.prev_rgba = None
+        self.prev_view_settings = None
 
         if _on_depsgraph_update not in bpy.app.handlers.depsgraph_update_post:
             bpy.app.handlers.depsgraph_update_post.append(_on_depsgraph_update)
@@ -238,15 +246,21 @@ class StreamRuntime:
             )
 
         url = f"http://127.0.0.1:{props.port}/stream"
-        self.set_status(
-            f"Streaming on {url} (all interfaces)" if props.listen_all else f"Streaming on {url}"
-        )
+        if self.helper.bound:
+            self.set_status(
+                f"Streaming on {url} (all interfaces)"
+                if props.listen_all else f"Streaming on {url}"
+            )
+        else:
+            # Cold-spawning child (interpreter + numpy import); the tick flips to
+            # the streaming status once the `bound` event arrives.
+            self.set_status("Starting…")
         return None
 
     def stop(self, unregister_timer=True):
-        """Tear down the timer, handlers, worker, server, and GPU resources.
-        Every step runs even if an earlier one raises (`run_guarded`) - in
-        particular the server stop, so the port always comes back. Idempotent.
+        """Tear down the timer, handlers, helper, and GPU resources. Every step
+        runs even if an earlier one raises (`run_guarded`) - in particular the
+        helper close, so the port always comes back. Idempotent.
 
         `unregister_timer=False` is for stopping from inside the tick itself:
         the tick then returns `None`, Blender's own unregistration path, so
@@ -269,43 +283,30 @@ class StreamRuntime:
                 bpy.types.SpaceView3D.draw_handler_remove(self.draw_handler, "WINDOW")
                 self.draw_handler = None
 
-        def join_worker():
-            # Wake the worker so it observes the stop flag and exits, then join.
-            with self.encode_cond:
-                self.worker_stop = True
-                self.encode_cond.notify_all()
-            if self.worker_thread is not None:
-                self.worker_thread.join(timeout=2.0)
-                self.worker_thread = None
-
-        def stop_server():
+        def close_helper():
             # The port release - the one step that must never be skippable.
-            server.stop_server(self.srv)
-            self.srv = None
+            # Closing stdin gives the helper EOF; it ends its responses and
+            # exits (terminate/kill fallback inside `close`).
+            if self.helper is not None:
+                self.helper.close()
+                self.helper = None
 
         def free_capture():
             if self.cap is not None:
                 self.cap.free()
                 self.cap = None
 
-        def free_encoder():
-            if self.encoder is not None:
-                self.encoder.free()
-                self.encoder = None
-
         def clear_refs():
-            self.hub = None
-            self.pending_frame = None
+            self.prev_rgba = None
+            self.prev_view_settings = None
 
         run_guarded(
             [
                 ("unregister timer", unregister_tick_timer),
                 ("remove depsgraph handler", remove_depsgraph_handler),
                 ("remove draw handler", remove_draw_handler),
-                ("join encode worker", join_worker),
-                ("stop server", stop_server),
+                ("close helper", close_helper),
                 ("free capture source", free_capture),
-                ("free encoder", free_encoder),
                 ("clear refs", clear_refs),
             ],
             log,
@@ -332,37 +333,58 @@ class StreamRuntime:
             return None
 
     def _tick_body(self):
-        """Paces the stream: runs the dedup gate and, when a fresh frame is
-        warranted, requests one and forces a viewport redraw (the draw handler
-        does the actual GPU capture). Returns the next interval, or `None` to
-        unregister once streaming stops."""
+        """Paces the stream: drains helper events, runs the dedup gate and, when
+        a fresh frame is warranted, requests one and forces a viewport redraw
+        (the draw handler does the actual GPU capture). Returns the next
+        interval, or `None` to unregister once streaming stops."""
         if not self.running:
             return None
 
-        # A failure recorded by the draw handler or encode worker since the
-        # last tick - this is the safe context to tear down from.
+        # A failure recorded by the draw handler since the last tick - this is
+        # the safe context to tear down from.
         if self.pending_failure is not None:
             exc = self.pending_failure
             self.pending_failure = None
             self.fail(exc, from_tick=True)
             return None
 
-        # Watchdog: a helper thread that died without leaving a record must
-        # surface loudly, not as a silently frozen stream.
-        if self.worker_thread is not None and not self.worker_thread.is_alive():
-            raise RuntimeError("encode worker thread died")
-        srv_thread = getattr(self.srv, "_thread", None)
-        if srv_thread is not None and not srv_thread.is_alive():
-            raise RuntimeError("stream server thread died")
-
         scene = bpy.context.scene
         props = scene.darkly_stream
         interval = 1.0 / max(1, props.fps)
 
+        # Drain the helper: write progress on any in-flight frame + parse events.
+        for evt in self.helper.pump():
+            kind = evt.get("event")
+            if kind == "bind_error":
+                raise RuntimeError(
+                    bridge.bind_error_message(props.port, evt.get("error", "bind failed"))
+                )
+            if kind == "clients":
+                self.client_count = evt.get("count", 0)
+            elif kind == "encode_error":
+                # The frame was never published, so the dedup key must forget it
+                # or the next identical capture would be dropped forever.
+                self.prev_rgba = None
+                self.prev_view_settings = None
+            elif kind == "fatal":
+                raise RuntimeError(f"helper: {evt.get('error', 'fatal')}")
+
+        # Watchdogs: a child that died or wedged (mid-transfer, or a handshake
+        # that never resolved) must surface loudly, not as a frozen stream.
+        if not self.helper.alive():
+            raise RuntimeError("helper process died")
+        if self.helper.stalled(5.0):
+            raise RuntimeError("helper process stalled")
+
+        # Still waiting on the HTTP bind (cold child); capture stays gated.
+        if self.helper.handshake_pending:
+            self.set_status("Starting…")
+            return interval
+
         # Zero cost when nobody is connected: no capture, no readback, no
         # encode. The add-on must not touch Blender's frame budget while
         # Darkly isn't looking.
-        if self.hub.client_count == 0:
+        if self.client_count == 0:
             self.set_status("Streaming - no client connected")
             return interval
 
@@ -381,7 +403,7 @@ class StreamRuntime:
         # any text change, and the draw handler turns any external redraw into a
         # capture, so a per-capture status (fluctuating ms timings) would spin a
         # self-sustaining capture loop on a static scene.
-        self.set_status(f"Streaming - {self.hub.client_count} client(s)")
+        self.set_status(f"Streaming - {self.client_count} client(s)")
 
         # Type-owned dirtiness: the viewport source is dirty on a redraw of the
         # streamed viewport, the camera source on its own signature change.
@@ -399,7 +421,7 @@ class StreamRuntime:
         # A live capture needs an active GPU context, which a timer tick
         # lacks. So the timer only *requests* a frame and forces a viewport
         # redraw; the draw handler runs during that redraw (valid GPU context)
-        # and does the actual capture + worker handoff. The observer sets no
+        # and does the actual capture + helper handoff. The observer sets no
         # per-redraw gate, so that requested redraw reliably lands the capture -
         # a depsgraph edit can't be swallowed.
         if decision.is_change:
@@ -430,9 +452,10 @@ class StreamRuntime:
         viewport, so it first filters to the streamed one, then splits:
 
         - servicing the timer's requested capture (`capture_pending`): do the
-          GPU capture and hand the raw pixels to the encode worker. This redraw
-          was ours, so it must NOT set `redraw_seen`, or the timer's own
-          capture-servicing redraw would re-trigger the next tick forever.
+          GPU capture, drop a raw duplicate, else hand the raw pixels to the
+          helper. This redraw was ours, so it must NOT set `redraw_seen`, or the
+          timer's own capture-servicing redraw would re-trigger the next tick
+          forever.
         - otherwise: record that the streamed viewport redrew
           (`redraw_seen = True`) - the honest change signal the tick reads."""
         if not self.running:
@@ -464,56 +487,23 @@ class StreamRuntime:
         if result is None:
             return
 
-        # Hand the raw pixels to the worker (latest wins; a slow encode never
-        # backs up the main thread - stale frames are simply overwritten).
-        with self.encode_cond:
-            self.pending_frame = result
-            self.encode_cond.notify()
+        width, height, rgba, view_settings = result
 
-    def _encode_worker(self):
-        """Worker thread: drain the latest captured frame, drop it if it's a
-        raw duplicate of the last published one, else transform + encode it
-        (numpy/OCIO/OpenImageIO, no `bpy`) and publish to the server. Idles on
-        the condition when there's nothing to do, so it costs nothing on a
-        static scene.
+        # Pre-send raw duplicate gate: a redundant frame never touches the pipe
+        # or the encoder. Runs here, on the main thread, before serialization.
+        if dedup.frame_is_duplicate(
+            rgba, view_settings, self.prev_rgba, self.prev_view_settings
+        ):
+            return
 
-        The dedup lives here (off the main thread) because it holds one ~15 MB
-        buffer and runs a raw-pixel compare; the redraw-driven capture path is
-        deliberately unconditional (progressive refinement is invisible to any
-        cheap proxy), so the raw compare is what filters redundant frames -
-        e.g. an incidental hover redraw, or a converged scene's trailing
-        harvest. Harvest/termination decisions stay main-thread and never
-        consult this outcome."""
-        prev_rgba = None
-        prev_view_settings = None
-        try:
-            while True:
-                with self.encode_cond:
-                    while self.pending_frame is None and not self.worker_stop:
-                        self.encode_cond.wait()
-                    if self.worker_stop:
-                        return
-                    width, height, rgba, view_settings = self.pending_frame
-                    self.pending_frame = None
-
-                if encode.frame_is_duplicate(
-                    rgba, view_settings, prev_rgba, prev_view_settings
-                ):
-                    continue
-
-                try:
-                    frame = self.encoder.encode(width, height, rgba, view_settings)
-                    self.hub.publish(frame)
-                    prev_rgba = rgba
-                    prev_view_settings = view_settings
-                except Exception:  # noqa: BLE001 - a bad frame must not kill the worker
-                    log.exception("encode error")
-                    continue
-        except Exception as exc:  # noqa: BLE001 - anything past the per-frame guard
-            # Record for the next tick (which also watchdogs a dead worker);
-            # the worker can't tear the runtime down from inside itself.
-            log.exception("encode worker died")
-            self.pending_failure = exc
+        # Hand the raw pixels to the helper (latest wins; a slow encode never
+        # backs up the main thread - stale frames are simply overwritten). The
+        # pump pushes the bytes now; a broken pipe sets a dead flag the tick
+        # watchdog notices rather than raising mid-draw.
+        self.helper.send_frame(width, height, rgba, view_settings)
+        self.helper.pump()
+        self.prev_rgba = rgba
+        self.prev_view_settings = view_settings
 
 
 # One stream per Blender process. The instance persists after a failure so the
@@ -523,14 +513,14 @@ _runtime = None
 
 
 def start_stream(scene):
-    """Bind the server and register the capture pipeline. Returns an error
+    """Spawn the helper and register the capture pipeline. Returns an error
     string, or `None` on success."""
     global _runtime
     if _runtime is None:
         _runtime = StreamRuntime()
     if _runtime.running:
         return None
-    # Reclaim anything a previous half-failed stop left behind before rebinding.
+    # Reclaim anything a previous half-failed stop left behind before restarting.
     if _runtime.has_live_resources():
         _runtime.stop()
     return _runtime.start(scene)

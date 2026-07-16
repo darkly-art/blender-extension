@@ -1,11 +1,11 @@
 """Exception-contained step running for runtime teardown - stdlib only, no `bpy`.
 
 Stopping the stream is a sequence of independent releases (timer, handlers,
-worker thread, HTTP server, GPU resources). If one raises and the rest are
-skipped, the process is left in the worst state of all: partially alive, with
-the port still held and no UI path to recover. `run_guarded` makes the fix
-structural rather than a per-call-site discipline: every step runs no matter
-what the earlier ones did.
+helper subprocess, GPU resources). If one raises and the rest are skipped, the
+process is left in the worst state of all: partially alive, with the port still
+held and no UI path to recover. `run_guarded` makes the fix structural rather
+than a per-call-site discipline: every step runs no matter what the earlier
+ones did.
 """
 
 

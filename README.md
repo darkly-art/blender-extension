@@ -4,14 +4,19 @@
 [![Darkly](https://img.shields.io/badge/GitHub-Darkly-orange?logo=github&logoColor=white&style=for-the-badge&color=6914ff)](https://github.com/darkly-art/darkly)
 
 ![Blender](https://img.shields.io/badge/Blender_5.1+-000000?style=for-the-badge&logo=blender&logoColor=9500ff)
-![Python](https://img.shields.io/badge/Python-000000?style=for-the-badge&logo=python&logoColor=6914ff)
 [![CI](https://img.shields.io/github/actions/workflow/status/darkly-art/blender-extension/ci.yml?branch=master&label=CI&logo=github&labelColor=black&logoColor=4400ff&style=for-the-badge&color=4400ff)](https://github.com/darkly-art/blender-extension/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/darkly-art/blender-extension?label=Release&logo=github&labelColor=black&logoColor=4400ff&style=for-the-badge&color=4400ff)](https://github.com/darkly-art/blender-extension/releases/latest)
 [![License](https://img.shields.io/badge/GPL--3.0-000000?style=for-the-badge&label=License&labelColor=black&color=4400ff)](LICENSE)
 
-Stream a live view of Blender into [Darkly](https://darkly.art) over localhost. The stream has a **transparent background**, so you can paint behind and around your 3D scene and treat Blender as just another layer.
+Stream a live view of Blender into [Darkly](https://darkly.art) over localhost. The stream has a **transparent background**, so you can paint above and below your 3D scene and treat Blender as just another layer.
 
-It reuses Blender's own viewport render with zero extra work and streams it continuously over a single HTTP request, using only builtin libraries.
+![Darkly](https://github.com/user-attachments/assets/30a589cb-dd53-464b-bcf3-b0d9433e31fe)
+
+Darkly is an open source editor for digital artists and painters. You can download it from the [Darkly Github](https://github.com/darkly-art/darkly/releases) or run it in the browser at [demo.darkly.art](https://demo.darkly.art).
+
+This Blender extension helps speed up hybrid workflows and lets you quickly try out different camera and lighting angles without having to render and paste over and over.
+
+It reuses Blender's own viewport render and streams it continuously over a single HTTP request, without any extra CPU/GPU work or external dependencies.
 
 https://github.com/user-attachments/assets/f92eec50-b2e7-4c4d-9967-1966d4df9037
 
@@ -24,7 +29,9 @@ Both stream the **viewport shading** (Solid / Material Preview / Rendered), not 
 
 ## Install
 
-Grab the latest zip from [Releases](https://github.com/darkly-art/blender-extension/releases/latest) and install it via **Edit → Preferences → Get Extensions → Install from Disk…**
+To install from the Blender marketplace, go to **Edit → Preferences → Get Extensions**, and search for "Darkly Stream".
+
+You can also grab the latest zip from [Releases](https://github.com/darkly-art/blender-extension/releases/latest) and install it via **Install from Disk…**
 
 Or build and install from source (needs `blender` on your `PATH`):
 
@@ -51,13 +58,13 @@ Good to know:
 
 ## How it works
 
-The viewport source grabs the last rendered frame straight from the viewport's own texture (transparent background, no overlays), so it adds no extra rendering; the camera source draws into an offscreen buffer instead. A capture is triggered whenever Blender repaints (a render pass, a view move, a scene edit), paced by a timer, and dropped if identical to the last — so a progressive renderer like Cycles keeps refining to full quality while an idle scene costs nothing. Only that grab runs on Blender's main thread; a worker thread does the color conversion and encodes a PNG. It's served at `GET /stream` as one long-lived HTTP/1.1 chunked response, each frame framed as `[4-byte big-endian length][PNG bytes]`, with a zero-length heartbeat after ~2 seconds of silence so clients can tell a quiet stream from a dead one.
+The viewport source grabs the last rendered frame straight from the viewport's own texture (transparent background, no overlays), so it adds no extra rendering; the camera source draws into an offscreen buffer instead. A capture is triggered whenever Blender repaints (a render pass, a view move, a scene edit), paced by a timer, and dropped if identical to the last — so a progressive renderer like Cycles keeps refining to full quality while an idle scene costs nothing. Only that grab runs on Blender's main thread; a small helper subprocess (launched with Blender's own Python) receives the raw pixels over a pipe, does the color conversion, encodes a PNG, and serves it — so Blender's process stays single-threaded. It's served at `GET /stream` as one long-lived HTTP/1.1 chunked response, each frame framed as `[4-byte big-endian length][PNG bytes]`, with a zero-length heartbeat after ~2 seconds of silence so clients can tell a quiet stream from a dead one. If Blender quits or crashes, the helper sees the pipe close and exits, so the port always comes back.
 
 ## Development
 
 Blender 5.1+ is the only requirement. The add-on bundles nothing and uses only libraries Blender ships (numpy, OpenImageIO, PyOpenColorIO).
 
-Unit tests need no Blender (the server, encode, readback, color management, and pacing/dedup logic are all `bpy`-free):
+Unit tests need no Blender (the server, helper bridge, encode, readback, color management, and pacing/dedup logic are all `bpy`-free):
 
 ```bash
 python3 -m unittest discover -s tests
@@ -75,14 +82,17 @@ darkly_stream/
   blender_manifest.toml  extension metadata (id, version, license)
   __init__.py     register/unregister, Scene props, operators, panel wiring
   stream.py       StreamRuntime: redraw-observed capture, pacing timer, harvest, crash containment
+  bridge.py       parent side of the helper subprocess: spawn, non-blocking pipe pump (bpy-free)
+  helper.py       helper subprocess entry point: asyncio serve/encode pipeline (bpy-free)
   pacing.py       per-tick capture/dirtiness + trailing-harvest decision (bpy-free)
+  dedup.py        pre-send raw-frame duplicate compare (bpy-free)
   lifecycle.py    exception-contained teardown steps (bpy-free)
   panel.py        View3D N-panel: Start/Stop, source, viewport, port, fps, camera, quality
   capture.py      viewport framebuffer readback (PRE_VIEW) + GPUOffScreen camera draw
   colormanage.py  scene-linear -> display transform via PyOpenColorIO (bpy-free)
   readback.py     gpu.Buffer -> numpy (bpy-free)
   encode.py       un-premultiply + display transform + PNG via OpenImageIO (bpy-free)
-  server.py       stdlib ThreadingHTTPServer chunked stream + seq/Condition dedup + heartbeat
+  server.py       asyncio chunked HTTP stream + seq/Condition dedup + heartbeat (bpy-free)
 tests/            unit tests for all of the above (no Blender needed)
 ```
 
@@ -90,6 +100,6 @@ tests/            unit tests for all of the above (no Blender needed)
 
 The viewport-source mechanism (reading the previous frame's scene render from the framebuffer bound during `'PRE_VIEW'` callbacks) is based on reading Blender's draw-manager source: `draw_context.cc` (`drw_callbacks_pre_scene`), `gpu_viewport.cc`, and the overlay engine's background pass (`overlay_background_frag.glsl`). The offscreen camera draw follows Blender's official `doc/python_api/examples/gpu.9.py`, and the framebuffer readback pattern follows Blender's bundled `addons_core/io_mesh_uv_layout/export_uv_png.py`.
 
-## License
+## Links
 
-GPL-3.0-or-later; see [LICENSE](LICENSE). (The wider Darkly project is AGPL-3.0-or-later; this add-on subtree is GPL so it can ship on Blender's extensions platform, which accepts only GPL-family licenses.)
+- **Darkly Blog** - [blog.darkly.art](https://blog.darkly.art)

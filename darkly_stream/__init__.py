@@ -7,11 +7,12 @@ frame. Frames are encoded as straight-alpha PNGs and streamed length-prefixed
 over HTTP so Darkly's `blender` void can composite the live 3D view onto the
 canvas - paint behind and around geometry thanks to the transparent background.
 
-The runtime itself - pacing timer, capture draw handler, encode worker, HTTP
-server lifecycle, and crash containment - lives in `stream.StreamRuntime`
-(see that module's docstring for the threading / context / failure model).
-This module holds the Blender registration surface: properties, operators,
-panel, and the re-exported module API.
+The runtime itself - pacing timer, capture draw handler, helper subprocess
+lifecycle, and crash containment - lives in `stream.StreamRuntime` (see that
+module's docstring for the subprocess / context / failure model). The
+serve/encode pipeline runs in a helper subprocess (`helper.py`), so the Blender
+process stays main-thread only. This module holds the Blender registration
+surface: properties, operators, panel, and the re-exported module API.
 """
 
 import bpy

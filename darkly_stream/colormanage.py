@@ -2,13 +2,15 @@
 
 The viewport source reads the viewport's render texture, which is scene-linear
 (Blender applies the display transform only when blitting to screen). To make
-the stream match what the user sees, this module reproduces that transform on
-the worker thread.
+the stream match what the user sees, this module reproduces that transform in
+the helper subprocess (the `DisplayTransform.apply` half runs inside the encode,
+off the asyncio loop).
 
-Runs on a **worker thread**, so it must not touch `bpy`. The two entry points
-that inspect Blender state (`view_settings_snapshot`) only read plain
-attributes off duck-typed objects, so the module stays importable and testable
-without Blender.
+The transform half must not touch `bpy` (it isn't present in the helper).
+`view_settings_snapshot` runs the other way round - on Blender's main thread at
+capture time - but only reads plain attributes off duck-typed objects, so the
+whole module stays importable and testable without Blender; the snapshot travels
+to the helper alongside the frame.
 
 Which settings apply depends on the shading mode. Mirrors Blender's
 `drw_color_management_type_for_v3d` (`draw_color_management.cc:47`):

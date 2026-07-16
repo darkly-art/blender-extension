@@ -1,17 +1,19 @@
-"""Captured frame -> straight-alpha PNG via OpenImageIO. Thread-safe, no `bpy`.
+"""Captured frame -> straight-alpha PNG via OpenImageIO. No `bpy`.
 
-Runs on a **worker thread** (see `__init__._encode_worker`), so it must not touch
-`bpy` (main-thread-only). OpenImageIO is bundled with Blender (`import OpenImageIO`,
-see `addons_core/io_mesh_uv_layout/export_uv_png.py`) and is safe off-thread.
+Runs in the **helper subprocess** (see `helper.py`), off the asyncio loop via
+`run_in_executor`, so it must not touch `bpy` (which isn't present in the child
+at all). OpenImageIO is bundled with Blender (`import OpenImageIO`, see
+`addons_core/io_mesh_uv_layout/export_uv_png.py`) and works standalone under
+Blender's Python.
 
 Accepts both pixel semantics the capture sources produce (`capture.py`):
 
   - **uint8** (camera source): display-referred, associated alpha - already
     color-managed by `draw_view3d(do_color_management=True)`.
   - **float32** (viewport source): scene-linear, associated alpha - the raw
-    render-texture contents; the display transform is applied here on the
-    worker via `colormanage` (with the `ViewSettings` snapshot taken at
-    capture time), keeping the main thread free of it.
+    render-texture contents; the display transform is applied here in the
+    helper via `colormanage` (with the `ViewSettings` snapshot taken at
+    capture time), keeping Blender's main thread free of it.
 
 Both are un-premultiplied to straight alpha first (for float input this must
 precede the display transform - transforming premultiplied colour would darken
@@ -60,11 +62,11 @@ except ImportError:
 
 class FrameEncoder:
     """Encodes a captured RGBA buffer to PNG bytes. One temp file per encoder
-    (reused across frames); call from a single worker thread.
+    (reused across frames); call sequentially (the helper's single encoder task).
 
     `compression` is the libpng level (0 = none/fastest, 9 = smallest/slowest);
     the default trades a little size for a lot of speed since the encode runs
-    continuously on the worker. `ocio_config_path` feeds the display transform
+    continuously in the helper. `ocio_config_path` feeds the display transform
     for float (scene-linear) input; `None` falls back to sRGB."""
 
     def __init__(self, compression=1, ocio_config_path=None):
@@ -78,9 +80,9 @@ class FrameEncoder:
     def encode(self, width, height, rgba, view_settings=None):
         """Un-premultiply, color-manage (float input), flip, and encode to PNG
         bytes. `rgba` is the bottom-up, associated-alpha array a capture source
-        produced (a CPU numpy array - safe to hand across threads); float32
-        input is scene-linear and requires the `view_settings` snapshot taken
-        with it."""
+        produced (a CPU numpy array, reconstructed in the helper from the pipe);
+        float32 input is scene-linear and requires the `view_settings` snapshot
+        taken with it."""
         if rgba.dtype == np.uint8:
             arr = rgba.reshape(height, width, 4).astype(np.float32) / 255.0
             workbench_aa = False
@@ -153,32 +155,6 @@ def _unpremultiply(arr, workbench_aa):
         straight[..., :3] = np.where(mask, straight[..., :3], 0.0)
     straight[..., 3:4] = alpha
     return straight
-
-
-def frame_is_duplicate(rgba, view_settings, prev_rgba, prev_view_settings):
-    """True when this raw captured frame would encode to the same PNG as the
-    last published one, so the expensive encode can be skipped.
-
-    Compared on the *raw* buffer (pre display transform) plus its `ViewSettings`
-    snapshot: raw-identical pixels under identical settings encode to identical
-    bytes (the encode is deterministic), so this never drops a distinct-looking
-    frame. The settings are part of the key because the raw buffer is
-    scene-linear - a grading change (exposure / view transform / OCIO) leaves
-    the pixels identical while the displayed frame differs, and must NOT be
-    deduped. A shape change (viewport resize) is a mismatch, as is the first
-    frame (`prev_rgba is None`).
-
-    A plain `np.array_equal` is the compare: on a 720p float frame it is
-    ~1.7 ms for the equal case (the case that matters - it saves the ~30 ms
-    encode), memory-bandwidth-bound and needing no digest. A distinct frame
-    gets encoded regardless, so its compare cost is noise next to the encode; a
-    strided fast-reject was measured to only *slow* the equal case, so there
-    isn't one."""
-    if prev_rgba is None or view_settings != prev_view_settings:
-        return False
-    if rgba.shape != prev_rgba.shape:
-        return False
-    return np.array_equal(rgba, prev_rgba)
 
 
 _SRGB_FALLBACK = colormanage.ViewSettings(
