@@ -203,7 +203,7 @@ class StreamRuntime:
         # permission for the same reason (per the manifest spec it means
         # internet access).
 
-        props = scene.darkly_stream
+        props = scene.darkly
         self.helper = bridge.HelperProcess()
         err = self.helper.spawn(
             _HELPER_PATH,
@@ -318,7 +318,7 @@ class StreamRuntime:
         """Contain a pipeline failure: log it, tear everything down (the port
         must come back), and pin an error status in the panel. `from_tick`
         defers timer unregistration to the tick's own `return None`."""
-        log.error("darkly_stream failed, stopping stream", exc_info=exc)
+        log.error("darkly failed, stopping stream", exc_info=exc)
         self.failed = True
         self.stop(unregister_timer=not from_tick)
         self.set_status(f"Error: {str(exc) or type(exc).__name__} (see console)")
@@ -349,7 +349,7 @@ class StreamRuntime:
             return None
 
         scene = bpy.context.scene
-        props = scene.darkly_stream
+        props = scene.darkly
         interval = 1.0 / max(1, props.fps)
 
         # Drain the helper: write progress on any in-flight frame + parse events.
@@ -478,7 +478,7 @@ class StreamRuntime:
             return
 
         scene = ctx.scene
-        props = scene.darkly_stream
+        props = scene.darkly
 
         # Claim the request before capturing so a redraw storm can't double-capture.
         self.capture_pending = False

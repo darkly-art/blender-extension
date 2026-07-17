@@ -1,6 +1,6 @@
-# Darkly Stream, agent guide
+# Darkly, agent guide
 
-Blender extension (`darkly_stream/`) that streams the viewport or a camera view to Darkly over a localhost HTTP server. User-facing docs live in [README.md](README.md).
+Blender extension (`darkly/`) that streams the viewport or a camera view to Darkly over a localhost HTTP server. User-facing docs live in [README.md](README.md).
 
 ## Run this after any change
 
@@ -11,8 +11,8 @@ CI (`.github/workflows/ci.yml`) runs exactly these on every PR and master push. 
 python3 -m unittest discover -s tests -v
 
 # Manifest validation + extension build (needs blender 5.1+ on PATH)
-blender --command extension validate darkly_stream
-mkdir -p dist && blender --command extension build --source-dir darkly_stream --output-dir dist
+blender --command extension validate darkly
+mkdir -p dist && blender --command extension build --source-dir darkly --output-dir dist
 ```
 
 ## Known CI breakers
@@ -22,7 +22,7 @@ mkdir -p dist && blender --command extension build --source-dir darkly_stream --
 
 ## Releases
 
-A green CI run on a master push publishes a GitHub release tagged `v<version>` from the manifest, with the built zip attached, unless that tag already exists. To ship: bump `version` in `darkly_stream/blender_manifest.toml` and push to master. Pushes without a bump build but skip the release.
+A green CI run on a master push publishes a GitHub release tagged `v<version>` from the manifest, with the built zip attached, unless that tag already exists. To ship: bump `version` in `darkly/blender_manifest.toml` and push to master. Pushes without a bump build but skip the release.
 
 ## Headless smoke test
 
@@ -31,11 +31,11 @@ Registers the add-on from this source tree inside Blender. `--factory-startup` i
 ```bash
 blender --background --factory-startup --python-expr "
 import sys; sys.path.insert(0, '.')
-import darkly_stream
-darkly_stream.register()
+import darkly
+darkly.register()
 import bpy
-print(darkly_stream.start_stream(bpy.context.scene))
-darkly_stream.unregister()"
+print(darkly.start_stream(bpy.context.scene))
+darkly.unregister()"
 ```
 
 ## Conventions

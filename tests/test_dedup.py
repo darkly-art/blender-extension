@@ -14,7 +14,7 @@ import unittest
 
 import numpy as np
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "darkly_stream"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "darkly"))
 
 import colormanage  # noqa: E402
 import dedup  # noqa: E402

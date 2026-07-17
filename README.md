@@ -29,15 +29,15 @@ Both stream the **viewport shading** (Solid / Material Preview / Rendered), not 
 
 ## Install
 
-To install from the Blender marketplace, go to **Edit → Preferences → Get Extensions**, and search for "Darkly Stream".
+To install from the Blender marketplace, go to **Edit → Preferences → Get Extensions**, and search for "Darkly".
 
 You can also grab the latest zip from [Releases](https://github.com/darkly-art/blender-extension/releases/latest) and install it via **Install from Disk…**
 
 Or build and install from source (needs `blender` on your `PATH`):
 
 ```bash
-mkdir -p dist && blender --command extension build --source-dir darkly_stream --output-dir dist
-blender --command extension install-file --repo user_default --enable dist/darkly_stream-*.zip
+mkdir -p dist && blender --command extension build --source-dir darkly --output-dir dist
+blender --command extension install-file --repo user_default --enable dist/darkly-*.zip
 ```
 
 ## Use
@@ -74,11 +74,11 @@ Headless smoke test (needs Blender; installed extensions live under `bl_ext`):
 
 ```bash
 blender --background your_scene.blend --python-expr \
-  "from bl_ext.user_default import darkly_stream; darkly_stream.start_stream(__import__('bpy').context.scene)"
+  "from bl_ext.user_default import darkly; darkly.start_stream(__import__('bpy').context.scene)"
 ```
 
 ```
-darkly_stream/
+darkly/
   blender_manifest.toml  extension metadata (id, version, license)
   __init__.py     register/unregister, Scene props, operators, panel wiring
   stream.py       StreamRuntime: redraw-observed capture, pacing timer, harvest, crash containment

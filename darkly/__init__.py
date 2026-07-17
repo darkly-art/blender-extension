@@ -1,4 +1,4 @@
-"""Darkly Stream - serve a live view of Blender to Darkly over localhost.
+"""Darkly - serve a live view of Blender to Darkly over localhost.
 
 Streams one of two sources (`capture.SOURCES`, chosen in the panel): the 3D
 viewport's own view - captured by reusing the pixels Blender already rendered,
@@ -56,7 +56,7 @@ def _viewport_enum_items(_self, _context):
     return items
 
 
-class DarklyStreamProperties(bpy.types.PropertyGroup):
+class DarklyProperties(bpy.types.PropertyGroup):
     source: bpy.props.EnumProperty(
         name="Source",
         items=(
@@ -113,7 +113,7 @@ class DarklyStreamProperties(bpy.types.PropertyGroup):
 
 class DARKLY_OT_stream_start(bpy.types.Operator):
     bl_idname = "darkly.stream_start"
-    bl_label = "Start Darkly Stream"
+    bl_label = "Start Stream"
     bl_description = "Begin serving the selected view to Darkly"
 
     def execute(self, context):
@@ -126,7 +126,7 @@ class DARKLY_OT_stream_start(bpy.types.Operator):
 
 class DARKLY_OT_stream_stop(bpy.types.Operator):
     bl_idname = "darkly.stream_stop"
-    bl_label = "Stop Darkly Stream"
+    bl_label = "Stop Stream"
     bl_description = "Stop serving the view"
 
     def execute(self, _context):
@@ -137,7 +137,7 @@ class DARKLY_OT_stream_stop(bpy.types.Operator):
 from .panel import DARKLY_PT_stream_panel  # noqa: E402 - after operator defs
 
 _CLASSES = (
-    DarklyStreamProperties,
+    DarklyProperties,
     DARKLY_OT_stream_start,
     DARKLY_OT_stream_stop,
     DARKLY_PT_stream_panel,
@@ -147,11 +147,11 @@ _CLASSES = (
 def register():
     for cls in _CLASSES:
         bpy.utils.register_class(cls)
-    bpy.types.Scene.darkly_stream = bpy.props.PointerProperty(type=DarklyStreamProperties)
+    bpy.types.Scene.darkly = bpy.props.PointerProperty(type=DarklyProperties)
 
 
 def unregister():
     stop_stream()
-    del bpy.types.Scene.darkly_stream
+    del bpy.types.Scene.darkly
     for cls in reversed(_CLASSES):
         bpy.utils.unregister_class(cls)

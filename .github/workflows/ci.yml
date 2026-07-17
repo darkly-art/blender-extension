@@ -56,15 +56,15 @@ jobs:
       - name: Blender version
         run: blender --version
       - name: Validate extension manifest
-        run: blender --command extension validate darkly_stream
+        run: blender --command extension validate darkly
       - name: Build extension
         # `--output-dir` must already exist — Blender's builder won't create it.
         run: |
           mkdir -p dist
-          blender --command extension build --source-dir darkly_stream --output-dir dist
+          blender --command extension build --source-dir darkly --output-dir dist
       - uses: actions/upload-artifact@v7
         with:
-          name: darkly_stream-extension
+          name: darkly-extension
           path: dist/*.zip
           if-no-files-found: error
 
@@ -82,7 +82,7 @@ jobs:
       - name: Read manifest version
         id: manifest
         run: |
-          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' darkly_stream/blender_manifest.toml)"
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' darkly/blender_manifest.toml)"
           test -n "$version"
           echo "tag=v${version}" >> "$GITHUB_OUTPUT"
       - name: Check whether the version is already released
@@ -97,7 +97,7 @@ jobs:
       - uses: actions/download-artifact@v8
         if: steps.tag.outputs.taken == 'false'
         with:
-          name: darkly_stream-extension
+          name: darkly-extension
           path: dist
       - name: Create release
         if: steps.tag.outputs.taken == 'false'

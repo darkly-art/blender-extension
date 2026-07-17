@@ -10,10 +10,10 @@ On the `run_in_executor` threads: the encode (~30 ms, CPU-bound) and the
 blocking stdin reads run via `loop.run_in_executor(None, ...)` - asyncio's own
 thread pool - so heartbeats and frame intake stay live while a frame encodes.
 That executor *is* threads, but here in the child, where they cannot crash
-Blender (the reviewer's stated concern), and the shipped **source** still
-contains no `import threading` / `import queue` (asyncio using the stdlib
-internally is not the extension importing it). Everything the extension writes
-is single-threaded asyncio.
+Blender (the reviewer's stated concern), and the shipped **source** still has no
+`threading` or `queue` import of its own (asyncio using the stdlib internally is
+not the extension importing it). Everything the extension writes is
+single-threaded asyncio.
 
 Side benefit: if Blender crashes or is killed, this process sees EOF on stdin
 and exits, ending every HTTP response, so the port always comes back.
@@ -140,7 +140,7 @@ async def _encoder_loop(loop, encoder, hub, latest, frame_ready, stop, emitter):
                     None, encoder.encode, width, height, rgba, view_settings
                 )
             except Exception as exc:  # noqa: BLE001 - a bad frame must not kill the helper
-                print(f"darkly_stream helper: encode error: {exc}", file=sys.stderr, flush=True)
+                print(f"darkly helper: encode error: {exc}", file=sys.stderr, flush=True)
                 emitter.emit({"event": "encode_error", "error": str(exc)})
                 continue
             await hub.publish(png)

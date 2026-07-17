@@ -23,12 +23,12 @@ import unittest
 import numpy as np
 from PIL import Image
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "darkly_stream"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "darkly"))
 
 import bridge  # noqa: E402
 import colormanage  # noqa: E402
 
-_HELPER = os.path.join(os.path.dirname(__file__), "..", "darkly_stream", "helper.py")
+_HELPER = os.path.join(os.path.dirname(__file__), "..", "darkly", "helper.py")
 
 
 def _free_port():

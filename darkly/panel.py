@@ -4,7 +4,7 @@ import bpy
 
 
 class DARKLY_PT_stream_panel(bpy.types.Panel):
-    bl_label = "Darkly Stream"
+    bl_label = "Darkly"
     bl_idname = "DARKLY_PT_stream_panel"
     bl_space_type = "VIEW_3D"
     bl_region_type = "UI"
@@ -16,7 +16,7 @@ class DARKLY_PT_stream_panel(bpy.types.Panel):
         from . import is_running, status_text, has_live_resources, has_failed
 
         layout = self.layout
-        props = context.scene.darkly_stream
+        props = context.scene.darkly
         running = is_running()
 
         # Stop stays reachable while *any* runtime resource is still held, not

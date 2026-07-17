@@ -74,7 +74,7 @@ class FrameEncoder:
         self._display = colormanage.DisplayTransform(ocio_config_path)
         # PID-scoped temp path so concurrent Blender instances don't collide.
         self._temp_path = os.path.join(
-            tempfile.gettempdir(), f"darkly_stream_{os.getpid()}.png"
+            tempfile.gettempdir(), f"darkly_{os.getpid()}.png"
         )
 
     def encode(self, width, height, rgba, view_settings=None):

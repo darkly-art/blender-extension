@@ -1,8 +1,8 @@
 schema_version = "1.0.0"
 
-id = "darkly_stream"
+id = "darkly"
 version = "0.3.0"
-name = "Darkly Stream"
+name = "Darkly"
 tagline = "Stream the viewport or a camera view into a Darkly layer"
 maintainer = "TheTechromancer <thetechromancer@protonmail.com>"
 type = "add-on"

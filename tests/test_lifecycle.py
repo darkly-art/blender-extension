@@ -8,7 +8,7 @@ import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "darkly_stream"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "darkly"))
 
 import lifecycle  # noqa: E402
 

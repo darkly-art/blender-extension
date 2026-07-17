@@ -13,7 +13,7 @@ import sys
 import types
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "darkly_stream"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "darkly"))
 
 import numpy as np  # noqa: E402
 

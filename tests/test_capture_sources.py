@@ -22,7 +22,7 @@ import sys
 import types
 import unittest
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "darkly_stream"))
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "darkly"))
 
 sys.modules.setdefault("bpy", types.SimpleNamespace())
 sys.modules.setdefault("gpu", types.SimpleNamespace())
