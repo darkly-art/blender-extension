@@ -94,7 +94,7 @@ jobs:
           else
             echo "taken=false" >> "$GITHUB_OUTPUT"
           fi
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v8
         if: steps.tag.outputs.taken == 'false'
         with:
           name: darkly_stream-extension
