@@ -126,7 +126,7 @@ jobs:
           ext_id="$(sed -n 's/^id = "\(.*\)"$/\1/p' darkly/blender_manifest.toml)"
           notes="$(gh release view "${{ steps.manifest.outputs.tag }}" --json body -q .body)"
           zip="$(ls dist/*.zip | head -n1)"
-          curl -fsSL --fail-with-body -X POST \
+          curl -sSL --fail-with-body -X POST \
             "https://extensions.blender.org/api/v1/extensions/${ext_id}/versions/upload/" \
             -H "Authorization:bearer ${BLENDER_EXTENSIONS_TOKEN}" \
             -F "version_file=@${zip}" \
