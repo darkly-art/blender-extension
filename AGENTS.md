@@ -17,9 +17,12 @@ mkdir -p dist && blender --command extension build --source-dir darkly --output-
 
 ## Releases
 
-A green CI run on a master push publishes a GitHub release tagged `v<version>` from the manifest, with the built zip attached, unless that tag already exists. To ship: bump `version` in `darkly/blender_manifest.toml` and push to master. Pushes without a bump build but skip the release.
+A green CI run on a master push publishes to two targets, each self-gated on its own state, so they publish and catch up independently. To ship: bump `version` in `darkly/blender_manifest.toml` and push to master. Pushes without a bump build but publish nothing new.
 
-The same job then uploads the version to the Blender Extensions Platform (extensions.blender.org) via its [REST API](https://developer.blender.org/docs/features/extensions/ci_cd/), gated on the same new-tag check so it fires once per bump. This needs a `BLENDER_EXTENSIONS_TOKEN` repository secret (generate one at extensions.blender.org/settings/tokens); the step skips cleanly when it is absent. Prerequisites: the extension must already be registered on the platform (the first submission is manual and goes through moderation), and the manifest `id` must match its platform slug. The upload uses the GitHub release notes as the marketplace release notes.
+- **GitHub release** `v<version>` (with the built zip attached) is created unless that tag already exists.
+- **Blender Extensions Platform** (extensions.blender.org) receives the version via its [REST API](https://developer.blender.org/docs/features/extensions/ci_cd/), gated on the platform's own currently published version — not on the GitHub release. So a run that failed or ran before the token existed is retried on the next push, rather than skipped forever because the git tag already exists. It needs a `BLENDER_EXTENSIONS_TOKEN` repository secret (generate one at extensions.blender.org/settings/tokens); the step skips cleanly when the secret is absent. It reuses the GitHub release notes as the marketplace release notes.
+
+Prerequisites for the Blender publish: the extension must already be registered on the platform (the first submission is manual and goes through moderation), and the manifest `id` must match its platform slug. Caveat: the platform listing only reflects *approved* versions, so re-pushing master while a freshly uploaded version is still awaiting moderation attempts a duplicate upload and fails until that version is approved.
 
 ## Headless smoke test
 

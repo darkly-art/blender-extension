@@ -79,40 +79,43 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v7
-      - name: Read manifest version
-        id: manifest
-        run: |
-          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' darkly/blender_manifest.toml)"
-          test -n "$version"
-          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
-      - name: Check whether the version is already released
-        id: tag
-        run: |
-          if git ls-remote --exit-code --tags origin "refs/tags/${{ steps.manifest.outputs.tag }}" > /dev/null; then
-            echo "::notice::${{ steps.manifest.outputs.tag }} already exists — skipping release"
-            echo "taken=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "taken=false" >> "$GITHUB_OUTPUT"
-          fi
+      # Both publishers reuse the validated zip the `extension` job just built,
+      # and each self-gates on its own target's current state — so they publish
+      # (or catch up) independently. Neither depends on the other having run.
       - uses: actions/download-artifact@v8
-        if: steps.tag.outputs.taken == 'false'
         with:
           name: darkly-extension
           path: dist
-      - name: Create release
-        if: steps.tag.outputs.taken == 'false'
+      - name: Read manifest
+        id: manifest
+        run: |
+          version="$(sed -n 's/^version = "\(.*\)"$/\1/p' darkly/blender_manifest.toml)"
+          ext_id="$(sed -n 's/^id = "\(.*\)"$/\1/p' darkly/blender_manifest.toml)"
+          test -n "$version" && test -n "$ext_id"
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "ext_id=${ext_id}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${version}" >> "$GITHUB_OUTPUT"
+      - name: Publish GitHub release
+        # Self-gates on the git tag: creates the release only when v<version>
+        # does not already exist, so it is a no-op on pushes without a bump.
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${{ steps.manifest.outputs.tag }}" dist/*.zip \
-            --title "${{ steps.manifest.outputs.tag }}" \
-            --generate-notes
+          tag="${{ steps.manifest.outputs.tag }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${tag}" > /dev/null; then
+            echo "::notice::${tag} already released — skipping GitHub release"
+            exit 0
+          fi
+          gh release create "$tag" dist/*.zip --title "$tag" --generate-notes
       - name: Publish to the Blender Extensions Platform
-        # Uploads the new version to extensions.blender.org via its REST API
-        # (https://developer.blender.org/docs/features/extensions/ci_cd/). Gated
-        # on the same new-tag check as the GitHub release, so it runs once per
-        # version bump. Reuses the GitHub release body as the marketplace notes.
-        if: steps.tag.outputs.taken == 'false'
+        # Uploads to extensions.blender.org via its REST API
+        # (https://developer.blender.org/docs/features/extensions/ci_cd/).
+        # Self-gates on the platform's own currently published version rather
+        # than on the GitHub release, so a failed or token-less earlier run is
+        # retried on the next push instead of being skipped forever. Caveat: the
+        # listing only reflects *approved* versions, so re-pushing master while a
+        # freshly uploaded version is still awaiting moderation will attempt a
+        # duplicate upload and fail loudly until that version is approved.
         env:
           GH_TOKEN: ${{ github.token }}
           BLENDER_EXTENSIONS_TOKEN: ${{ secrets.BLENDER_EXTENSIONS_TOKEN }}
@@ -123,9 +126,16 @@ jobs:
             echo "::notice::BLENDER_EXTENSIONS_TOKEN not set — skipping marketplace publish"
             exit 0
           fi
-          ext_id="$(sed -n 's/^id = "\(.*\)"$/\1/p' darkly/blender_manifest.toml)"
-          notes="$(gh release view "${{ steps.manifest.outputs.tag }}" --json body -q .body)"
+          ext_id="${{ steps.manifest.outputs.ext_id }}"
+          version="${{ steps.manifest.outputs.version }}"
+          published="$(curl -sSL --fail-with-body https://extensions.blender.org/api/v1/extensions/ \
+            | jq -r --arg id "$ext_id" 'first(.data[] | select(.id == $id) | .version) // ""')"
+          if [ "$published" = "$version" ]; then
+            echo "::notice::${ext_id} ${version} already published — skipping marketplace upload"
+            exit 0
+          fi
           zip="$(ls dist/*.zip | head -n1)"
+          notes="$(gh release view "${{ steps.manifest.outputs.tag }}" --json body -q .body 2>/dev/null || true)"
           curl -sSL --fail-with-body -X POST \
             "https://extensions.blender.org/api/v1/extensions/${ext_id}/versions/upload/" \
             -H "Authorization:bearer ${BLENDER_EXTENSIONS_TOKEN}" \
