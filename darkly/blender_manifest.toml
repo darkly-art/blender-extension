@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
-id = "darkly"
-version = "0.3.0"
+id = "darkly_stream"
+version = "0.4.1"
 name = "Darkly"
 tagline = "Stream the viewport or a camera view into a Darkly layer"
 maintainer = "TheTechromancer <thetechromancer@protonmail.com>"
@@ -12,8 +12,6 @@ tags = ["Import-Export"]
 
 blender_version_min = "5.1.0"
 
-# Blender's extension platform only accepts GPL-family licenses (add-ons link
-# Blender's GPL Python API); AGPL is rejected by the manifest validator.
 license = ["SPDX:GPL-3.0-or-later"]
 
 # Keep dev/build artifacts and tests out of the shipped zip.

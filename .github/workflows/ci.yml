@@ -107,3 +107,27 @@ jobs:
           gh release create "${{ steps.manifest.outputs.tag }}" dist/*.zip \
             --title "${{ steps.manifest.outputs.tag }}" \
             --generate-notes
+      - name: Publish to the Blender Extensions Platform
+        # Uploads the new version to extensions.blender.org via its REST API
+        # (https://developer.blender.org/docs/features/extensions/ci_cd/). Gated
+        # on the same new-tag check as the GitHub release, so it runs once per
+        # version bump. Reuses the GitHub release body as the marketplace notes.
+        if: steps.tag.outputs.taken == 'false'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BLENDER_EXTENSIONS_TOKEN: ${{ secrets.BLENDER_EXTENSIONS_TOKEN }}
+        run: |
+          # Skip cleanly when the secret is absent (e.g. a fork) so the GitHub
+          # release still succeeds without the marketplace credential.
+          if [ -z "$BLENDER_EXTENSIONS_TOKEN" ]; then
+            echo "::notice::BLENDER_EXTENSIONS_TOKEN not set — skipping marketplace publish"
+            exit 0
+          fi
+          ext_id="$(sed -n 's/^id = "\(.*\)"$/\1/p' darkly/blender_manifest.toml)"
+          notes="$(gh release view "${{ steps.manifest.outputs.tag }}" --json body -q .body)"
+          zip="$(ls dist/*.zip | head -n1)"
+          curl -fsSL --fail-with-body -X POST \
+            "https://extensions.blender.org/api/v1/extensions/${ext_id}/versions/upload/" \
+            -H "Authorization:bearer ${BLENDER_EXTENSIONS_TOKEN}" \
+            -F "version_file=@${zip}" \
+            -F "release_notes=${notes}"

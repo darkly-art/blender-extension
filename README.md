@@ -58,7 +58,9 @@ Good to know:
 
 ## How it works
 
-The viewport source grabs the last rendered frame straight from the viewport's own texture (transparent background, no overlays), so it adds no extra rendering; the camera source draws into an offscreen buffer instead. A capture is triggered whenever Blender repaints (a render pass, a view move, a scene edit), paced by a timer, and dropped if identical to the last — so a progressive renderer like Cycles keeps refining to full quality while an idle scene costs nothing. Only that grab runs on Blender's main thread; a small helper subprocess (launched with Blender's own Python) receives the raw pixels over a pipe, does the color conversion, encodes a PNG, and serves it — so Blender's process stays single-threaded. It's served at `GET /stream` as one long-lived HTTP/1.1 chunked response, each frame framed as `[4-byte big-endian length][PNG bytes]`, with a zero-length heartbeat after ~2 seconds of silence so clients can tell a quiet stream from a dead one. If Blender quits or crashes, the helper sees the pipe close and exits, so the port always comes back.
+When streaming the viewport, we reuse Blender's own preview, so there's no extra work; the camera source costs one extra render. Frames are only sent when the view changes.
+
+The extension runs a small web server on localhost. When Darkly opens `http://localhost:8765/stream`, that connection stays open and each new frame is pushed down it as a PNG, so the view updates live for as long as the tab is connected.
 
 ## Development
 
@@ -74,7 +76,7 @@ Headless smoke test (needs Blender; installed extensions live under `bl_ext`):
 
 ```bash
 blender --background your_scene.blend --python-expr \
-  "from bl_ext.user_default import darkly; darkly.start_stream(__import__('bpy').context.scene)"
+  "from bl_ext.user_default import darkly_stream; darkly_stream.start_stream(__import__('bpy').context.scene)"
 ```
 
 ```

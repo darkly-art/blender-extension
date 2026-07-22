@@ -15,14 +15,11 @@ blender --command extension validate darkly
 mkdir -p dist && blender --command extension build --source-dir darkly --output-dir dist
 ```
 
-## Known CI breakers
-
-- Blender's manifest spec caps several string fields at 64 characters, including `tagline` and each `[permissions]` value. Both have broken CI already. `extension validate` catches this locally.
-- There is deliberately no `[permissions]` table: per the spec, `network` means internet access, and this extension only listens on localhost / the local network. Do not add it back.
-
 ## Releases
 
 A green CI run on a master push publishes a GitHub release tagged `v<version>` from the manifest, with the built zip attached, unless that tag already exists. To ship: bump `version` in `darkly/blender_manifest.toml` and push to master. Pushes without a bump build but skip the release.
+
+The same job then uploads the version to the Blender Extensions Platform (extensions.blender.org) via its [REST API](https://developer.blender.org/docs/features/extensions/ci_cd/), gated on the same new-tag check so it fires once per bump. This needs a `BLENDER_EXTENSIONS_TOKEN` repository secret (generate one at extensions.blender.org/settings/tokens); the step skips cleanly when it is absent. Prerequisites: the extension must already be registered on the platform (the first submission is manual and goes through moderation), and the manifest `id` must match its platform slug. The upload uses the GitHub release notes as the marketplace release notes.
 
 ## Headless smoke test
 
