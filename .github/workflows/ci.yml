@@ -16,7 +16,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v7
         with:
           # Match the interpreter Blender 5.1 bundles, so the tests run against
           # the same Python the add-on executes under at runtime.
